@@ -1,0 +1,432 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-agent
+---
+# ---------- Ollama (GPU) ----------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-data
+  namespace: ai-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-config
+  namespace: ai-agent
+data:
+  OLLAMA_HOST: "0.0.0.0:11434"
+  OLLAMA_KEEP_ALIVE: "5m"
+  OLLAMA_NUM_PARALLEL: "2"
+  OLLAMA_MAX_LOADED_MODELS: "1"
+  DEFAULT_MODEL: "qwen3:14b"
+  # LLM response tuning. Applied by creating a model alias at startup.
+  AGENT_TEMPERATURE: "0.7"
+  AGENT_MAX_TOKENS: "2048"
+  AGENT_TOP_P: "0.9"
+  AGENT_REPEAT_PENALTY: "1.2"
+  AGENT_SYSTEM_PROMPT: "Be concise and direct. Avoid filler phrases, unnecessary preamble, and restating the question. Get to the point."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      initContainers:
+        - name: model-puller
+          image: ollama/ollama:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              ollama serve &
+              sleep 5
+              until ollama list >/dev/null 2>&1; do sleep 2; done
+              timeout 600 ollama pull "$DEFAULT_MODEL" || echo "Model pull failed or timed out"
+              timeout 120 ollama pull nomic-embed-text || echo "Embedding model pull failed or timed out"
+          env:
+            - name: DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: DEFAULT_MODEL
+          resources:
+            requests:
+              memory: 1Gi
+              cpu: 500m
+            limits:
+              memory: 2Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          envFrom:
+            - configMapRef:
+                name: ollama-config
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    sleep 10
+                    # Create tuned model alias with verbosity controls from ConfigMap
+                    cat > /tmp/Modelfile <<EOF
+                    FROM $DEFAULT_MODEL
+                    PARAMETER temperature $AGENT_TEMPERATURE
+                    PARAMETER num_predict $AGENT_MAX_TOKENS
+                    PARAMETER top_p $AGENT_TOP_P
+                    PARAMETER repeat_penalty $AGENT_REPEAT_PENALTY
+                    SYSTEM $AGENT_SYSTEM_PROMPT
+                    EOF
+                    ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile > /dev/null 2>&1 || true
+                    # Warmup the tuned alias
+                    curl -s --max-time 120 http://localhost:11434/api/generate \
+                      -d "{\"model\": \"${DEFAULT_MODEL}-agent\", \"prompt\": \"hi\", \"stream\": false, \"options\": {\"num_predict\": 1}}" \
+                      > /dev/null 2>&1 || true
+          resources:
+            requests:
+              memory: 2Gi
+              cpu: 1000m
+            limits:
+              memory: 12Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: ollama-data
+              mountPath: /root/.ollama
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: ollama-data
+          persistentVolumeClaim:
+            claimName: ollama-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ai-agent
+spec:
+  selector:
+    app: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      nodePort: 31434
+  type: NodePort
+---
+# ---------- SearXNG ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: ai-agent
+data:
+  settings.yml: |
+    use_default_settings: true
+    server:
+      secret_key: "REPLACE_SECRET_KEY"
+      limiter: false
+    search:
+      formats:
+        - html
+        - json
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      initContainers:
+        - name: inject-secret
+          image: busybox:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cp /etc/searxng-template/settings.yml /etc/searxng/settings.yml
+              sed -i "s|REPLACE_SECRET_KEY|$SEARXNG_SECRET_KEY|" /etc/searxng/settings.yml
+          env:
+            - name: SEARXNG_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: searxng-secret
+                  key: SEARXNG_SECRET_KEY
+          volumeMounts:
+            - name: settings-template
+              mountPath: /etc/searxng-template
+            - name: settings-live
+              mountPath: /etc/searxng
+      containers:
+        - name: searxng
+          image: searxng/searxng:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SEARXNG_BIND_ADDRESS
+              value: "0.0.0.0:8080"
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: settings-live
+              mountPath: /etc/searxng
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: settings-template
+          configMap:
+            name: searxng-settings
+        - name: settings-live
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: ai-agent
+spec:
+  selector:
+    app: searxng
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 31080
+  type: NodePort
+---
+# ---------- Qdrant (Vector Database) ----------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-data
+  namespace: ai-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:latest
+          ports:
+            - containerPort: 6333
+            - containerPort: 6334
+          volumeMounts:
+            - name: qdrant-data
+              mountPath: /qdrant/storage
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: qdrant-data
+          persistentVolumeClaim:
+            claimName: qdrant-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: ai-agent
+spec:
+  selector:
+    app: qdrant
+  ports:
+    - name: rest
+      port: 6333
+      targetPort: 6333
+      nodePort: 31333
+    - name: grpc
+      port: 6334
+      targetPort: 6334
+      nodePort: 31334
+  type: NodePort
+---
+# ---------- Open WebUI ----------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: ai-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-webui-config
+  namespace: ai-agent
+data:
+  OLLAMA_BASE_URLS: "http://ollama:11434"
+  ENABLE_RAG_WEB_SEARCH: "true"
+  RAG_WEB_SEARCH_ENGINE: "searxng"
+  SEARXNG_QUERY_URL: "http://searxng:8080/search?q=<query>&format=json"
+  WEBUI_AUTH: "false"
+  # Vector DB: use Qdrant instead of built-in ChromaDB
+  VECTOR_DB: "qdrant"
+  QDRANT_URI: "http://qdrant:6333"
+  # Use Ollama for embeddings instead of built-in HuggingFace model
+  RAG_EMBEDDING_ENGINE: "ollama"
+  RAG_EMBEDDING_MODEL: "nomic-embed-text"
+  # Pre-select the tuned model alias in the chat UI
+  DEFAULT_MODELS: "qwen3:14b-agent"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: ai-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:main
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: open-webui-config
+          volumeMounts:
+            - name: open-webui-data
+              mountPath: /app/backend/data
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 500m
+            limits:
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: open-webui-data
+          persistentVolumeClaim:
+            claimName: open-webui-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: ai-agent
+spec:
+  selector:
+    app: open-webui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 31380
+  type: NodePort
