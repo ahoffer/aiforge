@@ -25,16 +25,14 @@ Verify with `./tests/test-stack.sh` (8 checks) and `./tests/test-services.sh` (1
 
 ## Agent Frontends
 
-| Frontend | Launch | Latency | Web Search | MCP Tools | Autonomy | Best For |
-|----------|--------|---------|------------|-----------|----------|----------|
-| aider | `./aider.sh` | 13s | No | No | Human-in-loop | Pair programming, code edits |
-| goose | `./goose.sh` | 17s | Via MCP | Via config | Multi-step agent | Autonomous task sequences |
-| ollmcp | `./ollmcp.sh` | 4s | SearXNG | 5 servers | Tool-driven | Exploratory tool calling |
-| opencode | `./opencode.sh` | 1s | No | No | Human-in-loop | Code Q&A, quick edits |
-| openhands | `./openhands.sh` | 10s | SearXNG | No | Fully autonomous | End-to-end engineering |
-| Open WebUI | `:31380` | - | SearXNG | No | Chat | RAG, document analysis |
-
-Use aider or opencode for guided editing with human review. Use goose or openhands for autonomous multi-step work. Use ollmcp for maximum tool access across all five MCP servers. Open WebUI gives browser-based chat with RAG and document uploads.
+| Frontend | Latency | Description |
+|----------|---------|-------------|
+| `aider.sh` | 13s | Pair programming agent that proposes diffs for human review. Edits code in your working directory. No web search or tool use. |
+| `goose.sh` | 17s | Autonomous multi-step agent that chains tasks together. Web search and MCP tools available via config. Good for longer autonomous sequences. |
+| `ollmcp.sh` | 4s | Terminal chat with live tool calling across all 5 MCP servers. Web search via SearXNG, file access, git, shell commands. Best for exploring what the model can do with tools. |
+| `opencode.sh` | 1s | Lightweight TUI for quick code questions and small edits with human review. No web search or tool use. Fastest startup of any frontend. |
+| `openhands.sh` | 10s | Fully autonomous engineering agent that runs in a sandboxed container. Plans, codes, tests, and iterates without intervention. Web search via SearXNG. |
+| [Open WebUI](http://localhost:31380) | - | Browser chat interface for general questions, conversation, and web research. SearXNG integration searches the web automatically. Supports RAG, document uploads, and image generation. Works like ChatGPT. |
 
 ## MCP Tool Servers
 
