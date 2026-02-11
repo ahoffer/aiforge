@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Removes all resources in the ai-agent namespace.
+# Removes all resources in the aiforge namespace.
 # Persistent volumes are kept by default so model data survives reinstalls.
 # Pass --purge to also delete persistent volume claims.
 set -euo pipefail
 
-NS=ai-agent
+NS=aiforge
 PURGE=false
 
 for arg in "$@"; do

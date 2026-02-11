@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Model comparison benchmark for agentic tool calling.
 #
-# Tests candidate models against 12 prompts measuring tool-call JSON validity,
-# tool-use judgment, and latency. Hits Ollama /api/chat directly using the
-# same payload format as OllamaClient.chat(), then runs one end-to-end test
-# per model through the full agent stack.
+# Tests candidate models against 20 prompts (12 should-search, 8 should-not-search)
+# measuring tool-call JSON validity, tool-use judgment, and latency. Hits Ollama
+# /api/chat directly using the same payload format as OllamaClient.chat(), then
+# runs one end-to-end test per model through the full agent stack.
 #
 # Usage:
 #   bash tests/bench-model-compare.sh                    # all default models
@@ -43,29 +43,48 @@ AGENT_SYSTEM_PROMPT="Be concise and direct. Avoid filler phrases. When helping w
 TOOL_SYSTEM_PROMPT="You are a helpful research assistant with access to web search. Use the web_search tool when you need current information or facts you are not confident about. Cite your sources when you use search results. For simple questions you can answer confidently, respond directly without searching."
 
 # Prompt arrays. TAGS, PROMPTS, and EXPECTED are parallel arrays.
+# Search prompts (A1-A12) test whether the model recognizes when its training
+# data might be stale, without relying on obvious recency keywords. NoSearch
+# prompts (B1-B8) sound like they need research but are well-established
+# knowledge that any LLM can answer from training data.
 TAGS=(
-    "A1" "A2" "A3" "A4" "A5" "A6" "A7" "A8"
-    "B1" "B2" "B3" "B4"
+    "A1" "A2" "A3" "A4" "A5" "A6" "A7" "A8" "A9" "A10" "A11" "A12"
+    "B1" "B2" "B3" "B4" "B5" "B6" "B7" "B8"
 )
 
 PROMPTS=(
+    # Search: easy baseline, explicit recency (3)
     "What were the main announcements at KubeCon North America 2025?"
     "Find the latest stable release version of Python."
-    "Who won the most recent Super Bowl and what was the score?"
-    "What new features were added in the Ollama 0.6 release?"
     "Search for CVEs disclosed in OpenSSL during 2025."
-    "What is the current population of Austin, Texas?"
-    "Search for 'Kubernetes pod eviction policy' AND 'node affinity best practices'"
-    "I need current info about three things: the latest Go release, the latest Rust release, and the latest Zig release."
+    # Search: recent events beyond training data (3)
+    "Who won Super Bowl LX?"
+    "Who won the Super Bowl in 2026?"
+    "What companies have done the largest tech layoffs so far this year?"
+    # Search: moderate, implicit recency with no keyword hint (3)
+    "Is Python 3.12 still the latest stable Python release?"
+    "Does Kubernetes support native sidecar containers as a stable feature yet?"
+    "Has the EU AI Act entered into force yet, and what are its main obligations?"
+    # Search: hard, agentic engineering scenarios (3)
+    "What is the current Long-Term Support version of Node.js?"
+    "What were the breaking changes in Next.js 15?"
+    "What is the default garbage collector in the latest LTS release of Java?"
+    # NoSearch: easy baseline (2)
     "What is 7 times 13?"
-    "Explain what a Python decorator does in two sentences."
-    "Write a bash one-liner that counts the number of lines in a file."
     "What is the capital of France?"
+    # NoSearch: moderate, specific tech but stable knowledge (3)
+    "In a Dockerfile, what is the difference between CMD and ENTRYPOINT?"
+    "What sorting algorithm does Python's built-in sort() use, and what is its average time complexity?"
+    "When was Kubernetes first released, who created it, and what Google system inspired its design?"
+    # NoSearch: hard, tempting to search (3)
+    "Explain the CAP theorem. Can a distributed system guarantee all three properties simultaneously?"
+    "A Kubernetes node has 4 CPUs and 16GiB RAM. Each pod requests 500m CPU and 1GiB memory. What is the maximum number of pods the node can schedule based on resources alone?"
+    "Compare the Raft and Paxos consensus algorithms. Which is generally considered easier to understand and implement?"
 )
 
 EXPECTED=(
-    "search" "search" "search" "search" "search" "search" "search" "search"
-    "nosearch" "nosearch" "nosearch" "nosearch"
+    "search" "search" "search" "search" "search" "search" "search" "search" "search" "search" "search" "search"
+    "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch"
 )
 
 BENCH_SUFFIX="-agent-bench"
@@ -99,10 +118,31 @@ except Exception:
     fi
 
     echo "  Creating tuned alias ${aliasName}..."
-    modelfile="FROM ${baseModel}\nPARAMETER temperature ${AGENT_TEMPERATURE}\nPARAMETER num_predict ${AGENT_MAX_TOKENS}\nPARAMETER top_p ${AGENT_TOP_P}\nPARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}\nSYSTEM ${AGENT_SYSTEM_PROMPT}"
+    local createPayload
+    createPayload=$(BENCH_ALIAS="$aliasName" BENCH_BASE="$baseModel" \
+        BENCH_TEMP="$AGENT_TEMPERATURE" BENCH_MAX="$AGENT_MAX_TOKENS" \
+        BENCH_TOPP="$AGENT_TOP_P" BENCH_REP="$AGENT_REPEAT_PENALTY" \
+        BENCH_SYS="$AGENT_SYSTEM_PROMPT" \
+        python3 -c "
+import json, os, sys
+payload = {
+    'model': os.environ['BENCH_ALIAS'],
+    'from': os.environ['BENCH_BASE'],
+    'system': os.environ['BENCH_SYS'],
+    'parameters': {
+        'temperature': float(os.environ['BENCH_TEMP']),
+        'num_predict': int(os.environ['BENCH_MAX']),
+        'top_p': float(os.environ['BENCH_TOPP']),
+        'repeat_penalty': float(os.environ['BENCH_REP']),
+    },
+    'stream': False,
+}
+json.dump(payload, sys.stdout)
+" 2>/dev/null)
 
     createResponse=$(curl -s --max-time 120 "$OLLAMA_URL/api/create" \
-        -d "{\"name\": \"${aliasName}\", \"modelfile\": \"${modelfile}\", \"stream\": false}" \
+        -H "Content-Type: application/json" \
+        -d "$createPayload" \
         2>/dev/null || echo '{"error":"create failed"}')
 
     echo "  Warming up ${aliasName}..."
@@ -153,7 +193,7 @@ payload = {
         }
     ],
     'stream': False,
-    'options': {'enable_thinking': False},
+    'think': False,
 }
 json.dump(payload, sys.stdout)
 " 2>/dev/null)
@@ -314,7 +354,7 @@ echo "  This patches the agent ConfigMap and restarts the pod."
 echo ""
 
 E2E_PROMPT="What is the latest stable release of Go?"
-ORIGINAL_MODEL="qwen3:14b-agent"
+ORIGINAL_MODEL="devstral:latest-agent"
 
 declare -A e2eLatency e2eSearchCount e2eStatus
 
@@ -323,13 +363,13 @@ for model in "${MODELS[@]}"; do
     echo "  --- E2E: $model ---"
 
     echo "  Patching ConfigMap to ${aliasName}..."
-    kubectl patch configmap agent-config -n ai-agent \
+    kubectl patch configmap agent-config -n aiforge \
         --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${aliasName}\"}}" \
         > /dev/null 2>&1
 
     echo "  Restarting agent deployment..."
-    kubectl rollout restart deployment/agent -n ai-agent > /dev/null 2>&1
-    kubectl rollout status deployment/agent -n ai-agent --timeout=120s 2>/dev/null || true
+    kubectl rollout restart deployment/agent -n aiforge > /dev/null 2>&1
+    kubectl rollout status deployment/agent -n aiforge --timeout=120s 2>/dev/null || true
 
     # Wait a few seconds for readiness probe
     sleep 5
@@ -368,26 +408,44 @@ done
 
 # Restore original model
 echo "  Restoring ConfigMap to ${ORIGINAL_MODEL}..."
-kubectl patch configmap agent-config -n ai-agent \
+kubectl patch configmap agent-config -n aiforge \
     --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${ORIGINAL_MODEL}\"}}" \
     > /dev/null 2>&1
-kubectl rollout restart deployment/agent -n ai-agent > /dev/null 2>&1
-kubectl rollout status deployment/agent -n ai-agent --timeout=120s 2>/dev/null || true
+kubectl rollout restart deployment/agent -n aiforge > /dev/null 2>&1
+kubectl rollout status deployment/agent -n aiforge --timeout=120s 2>/dev/null || true
 echo "  Agent restored to ${ORIGINAL_MODEL}."
 echo ""
 
 # ---- Section 6: Comparison summary table ----
 
+# Format milliseconds as "Xm Ys" or just "Ys" when under a minute
+fmt_time() {
+    local ms=$1
+    local totalSec=$(( ms / 1000 ))
+    local min=$(( totalSec / 60 ))
+    local sec=$(( totalSec % 60 ))
+    if [ "$min" -gt 0 ]; then
+        printf "%dm %02ds" "$min" "$sec"
+    else
+        printf "%ds" "$sec"
+    fi
+}
+
 echo "================================================"
-echo "  Comparison Summary"
+echo "  Comparison Summary (sorted best to worst)"
 echo "================================================"
 echo ""
-printf "  %-22s %9s %8s %9s %11s %13s %5s %7s\n" \
-    "Model" "Judgment" "JSON OK" "Avg (ms)" "Search" "NoSearch" "E2E" "E2E ms"
-printf "  %-22s %9s %8s %9s %11s %13s %5s %7s\n" \
-    "----------------------" "---------" "--------" "---------" "-----------" "-------------" "-----" "-------"
+printf "  %-22s %9s %8s %8s %11s %13s %8s\n" \
+    "Model" "Judgment" "JSON OK" "Avg" "Search" "NoSearch" "E2E"
+printf "  %-22s %9s %8s %8s %11s %13s %8s\n" \
+    "----------------------" "---------" "--------" "--------" "-----------" "-------------" "--------"
 
-for model in "${MODELS[@]}"; do
+# Sort models by judgment score descending, then by avg latency ascending
+sortedModels=$(for model in "${MODELS[@]}"; do
+    echo "${modelJudgment[$model]} ${modelLatencySum[$model]} ${model}"
+done | sort -k1,1rn -k2,2n | awk '{print $3}')
+
+while IFS= read -r model; do
     promptCount=${modelPromptCount[$model]}
     judgScore="${modelJudgment[$model]}/${promptCount}"
     jsonScore="${modelJsonOk[$model]}/${promptCount}"
@@ -397,21 +455,27 @@ for model in "${MODELS[@]}"; do
     else
         avgLatency=0
     fi
+    avgFmt=$(fmt_time "$avgLatency")
 
     searchScore="${modelSearchCorrect[$model]}/${modelSearchTotal[$model]}"
     nosearchScore="${modelNosearchCorrect[$model]}/${modelNosearchTotal[$model]}"
 
-    e2eStatusVal="${e2eStatus[$model]:-n/a}"
+    e2eStatusVal="${e2eStatus[$model]:-fail}"
     e2eMsVal="${e2eLatency[$model]:-0}"
+    if [ "$e2eStatusVal" = "ok" ]; then
+        e2eFmt=$(fmt_time "$e2eMsVal")
+    else
+        e2eFmt="FAILED"
+    fi
 
-    printf "  %-22s %9s %8s %8dms %11s %13s %5s %6dms\n" \
-        "$model" "$judgScore" "$jsonScore" "$avgLatency" \
-        "$searchScore" "$nosearchScore" "$e2eStatusVal" "$e2eMsVal"
-done
+    printf "  %-22s %9s %8s %8s %11s %13s %8s\n" \
+        "$model" "$judgScore" "$jsonScore" "$avgFmt" \
+        "$searchScore" "$nosearchScore" "$e2eFmt"
+done <<< "$sortedModels"
 
 echo ""
 echo "  Judgment: model called web_search when expected and refrained when not"
 echo "  JSON OK: tool_calls had valid function.name and arguments.query"
-echo "  Search: correct calls out of 8 search-expected prompts"
-echo "  NoSearch: correct restraint out of 4 nosearch-expected prompts"
+echo "  Search: correct calls out of 12 search-expected prompts"
+echo "  NoSearch: correct restraint out of 8 nosearch-expected prompts"
 echo ""

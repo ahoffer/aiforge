@@ -3,7 +3,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: open-webui-data
-  namespace: ai-agent
+  namespace: aiforge
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
@@ -14,7 +14,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: open-webui-config
-  namespace: ai-agent
+  namespace: aiforge
 data:
   OLLAMA_BASE_URLS: "http://ollama:11434"
   ENABLE_RAG_WEB_SEARCH: "true"
@@ -28,13 +28,13 @@ data:
   RAG_EMBEDDING_ENGINE: "ollama"
   RAG_EMBEDDING_MODEL: "nomic-embed-text"
   # Pre-select the tuned model alias in the chat UI
-  DEFAULT_MODELS: "qwen3:14b-agent"
+  DEFAULT_MODELS: "devstral:latest-agent"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: open-webui
-  namespace: ai-agent
+  namespace: aiforge
 spec:
   replicas: 1
   strategy:
@@ -86,7 +86,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: open-webui
-  namespace: ai-agent
+  namespace: aiforge
 spec:
   selector:
     app: open-webui

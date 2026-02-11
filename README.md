@@ -4,7 +4,7 @@ Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search
 
 ## Architecture
 
-Five services in the `ai-agent` namespace.
+Five services in the `aiforge` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|

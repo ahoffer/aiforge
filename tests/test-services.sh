@@ -188,7 +188,7 @@ echo ""
 # so we verify the integration by confirming Ollama is reachable
 # from inside the cluster via the same DNS name Open WebUI uses.
 echo "--- Open WebUI: Ollama Connectivity ---"
-ollamaViaCluster=$(kubectl exec -n ai-agent deploy/open-webui -- \
+ollamaViaCluster=$(kubectl exec -n aiforge deploy/open-webui -- \
     curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
     "http://ollama:11434/" 2>/dev/null || echo "000")
 
@@ -258,7 +258,7 @@ fi
 echo ""
 echo "--- Ollama: Agent Model Alias ---"
 agentAliasJson=$(curl -s --max-time 10 "$OLLAMA_URL/api/show" \
-    -d '{"model":"qwen3:14b-agent"}' 2>/dev/null || echo "{}")
+    -d '{"model":"devstral:latest-agent"}' 2>/dev/null || echo "{}")
 
 aliasOk=$(echo "$agentAliasJson" | python3 -c "
 import sys, json
@@ -281,16 +281,16 @@ except Exception as e:
 " 2>/dev/null || echo "false|parse error")
 
 if [ "${aliasOk%%|*}" = "true" ]; then
-    report "Agent alias qwen3:14b-agent has tuned parameters" "true"
+    report "Agent alias devstral:latest-agent has tuned parameters" "true"
 else
-    report "Agent alias qwen3:14b-agent has tuned parameters" "false"
+    report "Agent alias devstral:latest-agent has tuned parameters" "false"
     echo "         ${aliasOk#*|}"
 fi
 
 # ---- Open WebUI config verification ----
 echo ""
 echo "--- Open WebUI: Integration Config ---"
-webuiEnv=$(kubectl exec -n ai-agent deploy/open-webui -- env 2>/dev/null || echo "")
+webuiEnv=$(kubectl exec -n aiforge deploy/open-webui -- env 2>/dev/null || echo "")
 
 checkEnv() {
     local varName="$1"
@@ -314,12 +314,12 @@ checkEnv "VECTOR_DB" "qdrant"
 checkEnv "QDRANT_URI" "http://qdrant:6333"
 checkEnv "RAG_EMBEDDING_ENGINE" "ollama"
 checkEnv "RAG_EMBEDDING_MODEL" "nomic-embed-text"
-checkEnv "DEFAULT_MODELS" "qwen3:14b-agent"
+checkEnv "DEFAULT_MODELS" "devstral:latest-agent"
 
 # ---- Open WebUI → Qdrant connectivity ----
 echo ""
 echo "--- Open WebUI: Qdrant Connectivity ---"
-qdrantViaCluster=$(kubectl exec -n ai-agent deploy/open-webui -- \
+qdrantViaCluster=$(kubectl exec -n aiforge deploy/open-webui -- \
     curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
     "http://qdrant:6333/healthz" 2>/dev/null || echo "000")
 
@@ -332,7 +332,7 @@ fi
 # ---- Open WebUI → SearXNG connectivity ----
 echo ""
 echo "--- Open WebUI: SearXNG Connectivity ---"
-searxViaCluster=$(kubectl exec -n ai-agent deploy/open-webui -- \
+searxViaCluster=$(kubectl exec -n aiforge deploy/open-webui -- \
     curl -s --max-time 10 \
     "http://searxng:8080/search?q=test&format=json" 2>/dev/null || echo "{}")
 

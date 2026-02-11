@@ -18,4 +18,4 @@ echo "Building agent:latest image..."
 sudo nerdctl build -t agent:latest .
 
 echo "Build complete. Deploy with:"
-echo "  kubectl apply -f /projects/aiagent/k8s/"
+echo "  kubectl apply -f /projects/aiforge/k8s/"

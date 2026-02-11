@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Bootstraps the ai-agent namespace with Ollama, SearXNG, Qdrant, and Open WebUI.
+# Bootstraps the aiforge namespace with Ollama, SearXNG, Qdrant, and Open WebUI.
 # Creates the SearXNG secret if needed, applies agent.yaml, and waits for rollout.
 set -euo pipefail
 
-NS=ai-agent
+NS=aiforge
 
 # Create namespace if it doesn't exist
 kubectl get ns "$NS" >/dev/null 2>&1 || kubectl create ns "$NS"
