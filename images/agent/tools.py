@@ -2,7 +2,6 @@
 
 Each tool has an OpenAI-compatible schema for Ollama native tool calling
 and a dispatch function that routes tool calls to the appropriate client.
-New tools are added here as the agent grows across phases.
 """
 
 import logging

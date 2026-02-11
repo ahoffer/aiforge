@@ -67,7 +67,7 @@ class OllamaClient:
         Returns:
             Complete response string or generator of chunks
         """
-        model = model or os.getenv("AGENT_MODEL", "qwen3:14b-agent")
+        model = model or os.getenv("AGENT_MODEL", "devstral:latest-agent")
 
         payload = {
             "model": model,
@@ -122,7 +122,7 @@ class OllamaClient:
             Full message dict (when tools provided), content string, or
             generator of chunks
         """
-        model = model or os.getenv("AGENT_MODEL", "qwen3:14b-agent")
+        model = model or os.getenv("AGENT_MODEL", "devstral:latest-agent")
 
         payload = {
             "model": model,

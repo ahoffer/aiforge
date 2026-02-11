@@ -9,7 +9,7 @@ printed in a table with per-test latency.
 Usage:
     python3 test-tool-calling.py [model_name] [--url URL]
 
-Defaults to qwen3:14b-16k on http://localhost:31434.
+Defaults to devstral:latest on http://localhost:31434.
 """
 
 import argparse
@@ -454,8 +454,8 @@ def main():
     parser.add_argument(
         "model",
         nargs="?",
-        default="qwen3:14b-16k",
-        help="Model name to test, default qwen3:14b-16k",
+        default="devstral:latest",
+        help="Model name to test, default devstral:latest",
     )
     parser.add_argument(
         "--url",

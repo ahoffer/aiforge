@@ -6,7 +6,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test-lib.sh"
 
-MODEL="${MODEL:-qwen3:14b-16k}"
+MODEL="${MODEL:-devstral:latest}"
 
 print_header "AI Agent Stack Validation"
 echo "Model:           $MODEL"

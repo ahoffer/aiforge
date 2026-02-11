@@ -4,7 +4,7 @@
 # and tool call latency across multiple configurations.
 #
 # Usage:
-#   ./bench-ollama.sh                        # defaults to qwen3:14b-16k
+#   ./bench-ollama.sh                        # defaults to devstral:latest
 #   MODEL=qwen3:8b ./bench-ollama.sh         # benchmark a different model
 #   ./bench-ollama.sh | tee bench-results.txt # save for comparison
 #   ./bench-ollama.sh | column -ts $'\t'      # pretty-print columns
@@ -12,7 +12,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../defaults.sh"
 
-MODEL="${MODEL:-qwen3:14b-16k}"
+MODEL="${MODEL:-devstral:latest}"
 TIMEOUT="${TIMEOUT:-120}"
 
 # ---- Header ----

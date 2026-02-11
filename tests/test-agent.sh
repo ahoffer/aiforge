@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Integration tests for the agent HTTP API.
-# Validates /health, /chat, /chat/stream endpoints.
+# Validates /health, /chat, /chat/stream, and /v1/chat/completions endpoints.
 # Exit codes: 0 if all checks pass, 1 if any check fails.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -126,6 +126,74 @@ if [ "$docsCode" = "200" ]; then
     report "Agent /docs serves OpenAPI UI" "true"
 else
     report "Agent /docs serves OpenAPI UI (HTTP $docsCode)" "false"
+fi
+echo ""
+
+# ---- OpenAI model list ----
+echo "--- Agent: OpenAI Model List ---"
+modelsJson=$(curl -s --max-time 10 "$AGENT_URL/v1/models" 2>/dev/null || echo "{}")
+modelsOk=$(echo "$modelsJson" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    models = d.get('data', [])
+    ids = [m.get('id') for m in models]
+    print('true' if 'agent' in ids else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo "false")
+
+if [ "$modelsOk" = "true" ]; then
+    report "Agent /v1/models lists agent model" "true"
+else
+    report "Agent /v1/models lists agent model" "false"
+fi
+echo ""
+
+# ---- OpenAI chat completions ----
+echo "--- Agent: OpenAI Chat Completions ---"
+completionsStart=$(date +%s%N)
+completionsJson=$(curl -s --max-time 120 "$AGENT_URL/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"agent","messages":[{"role":"user","content":"What is 2+2?"}]}' \
+    2>/dev/null || echo "{}")
+completionsEnd=$(date +%s%N)
+completionsMs=$(( (completionsEnd - completionsStart) / 1000000 ))
+
+completionsOk=$(echo "$completionsJson" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    content = d.get('choices', [{}])[0].get('message', {}).get('content', '')
+    print('true' if content else 'false')
+except Exception:
+    print('false')
+" 2>/dev/null || echo "false")
+
+if [ "$completionsOk" = "true" ]; then
+    report "Agent /v1/chat/completions responds (${completionsMs}ms)" "true"
+else
+    report "Agent /v1/chat/completions responds (${completionsMs}ms)" "false"
+fi
+echo ""
+
+# ---- OpenAI streaming completions ----
+echo "--- Agent: OpenAI Streaming ---"
+streamOaiStart=$(date +%s%N)
+streamOaiOutput=$(curl -s --max-time 120 "$AGENT_URL/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"agent","messages":[{"role":"user","content":"Say hello"}],"stream":true}' \
+    2>/dev/null || echo "")
+streamOaiEnd=$(date +%s%N)
+streamOaiMs=$(( (streamOaiEnd - streamOaiStart) / 1000000 ))
+
+hasDataChunk=$(echo "$streamOaiOutput" | grep -c '"choices"' 2>/dev/null || true)
+hasDoneMarker=$(echo "$streamOaiOutput" | grep -c '\[DONE\]' 2>/dev/null || true)
+
+if [ "$hasDataChunk" -gt 0 ] && [ "$hasDoneMarker" -gt 0 ]; then
+    report "Agent /v1/chat/completions streaming (${streamOaiMs}ms)" "true"
+else
+    report "Agent /v1/chat/completions streaming (${streamOaiMs}ms)" "false"
 fi
 echo ""
 

@@ -2,8 +2,10 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -23,6 +25,8 @@ logging.basicConfig(
 log = logging.getLogger("agent")
 
 
+# -- Native request/response models --
+
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
     message: str
@@ -41,6 +45,19 @@ class HealthResponse(BaseModel):
     """Response body for health check."""
     status: str
     services: dict[str, bool]
+
+
+# -- OpenAI-compatible models --
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str | None = None
+
+
+class OpenAIChatRequest(BaseModel):
+    model: str = "agent"
+    messages: list[OpenAIMessage] = []
+    stream: bool = False
 
 
 @asynccontextmanager
@@ -123,6 +140,152 @@ async def chat_stream(request: ChatRequest):
 
         except Exception as e:
             yield f"event: error\ndata: {str(e)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# -- OpenAI-compatible endpoints --
+
+@app.get("/v1/models")
+async def list_models():
+    """Return model list for OpenAI client discovery."""
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "agent",
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+            }
+        ],
+    }
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(request: OpenAIChatRequest):
+    """OpenAI-compatible chat completions endpoint.
+
+    Runs the message through the full agent graph and returns the
+    response in OpenAI ChatCompletion format. Supports both streaming
+    and non-streaming modes.
+    """
+    # Extract last user message
+    user_message = ""
+    for msg in reversed(request.messages):
+        if msg.role == "user" and msg.content:
+            user_message = msg.content
+            break
+
+    if not user_message:
+        raise HTTPException(status_code=400, detail="No user message found")
+
+    completion_id = f"chatcmpl-{uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if request.stream:
+        return await _stream_completions(user_message, completion_id, created)
+
+    return await _non_stream_completions(user_message, completion_id, created)
+
+
+async def _non_stream_completions(message: str, completion_id: str, created: int):
+    """Run graph and return a single ChatCompletion response."""
+    try:
+        result = await asyncio.to_thread(agent_graph.invoke, {
+            "message": message,
+            "conversation_id": str(uuid4()),
+        })
+
+        content = result.get("final_response", "")
+        sources = result.get("sources", [])
+        search_count = result.get("search_count", 0)
+
+        return {
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": "agent",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "metadata": {
+                "sources": sources,
+                "search_count": search_count,
+            },
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _stream_completions(message: str, completion_id: str, created: int):
+    """Stream graph output as OpenAI SSE delta chunks."""
+
+    async def generate():
+        try:
+            graph_input = {
+                "message": message,
+                "conversation_id": str(uuid4()),
+            }
+            outputs = await asyncio.to_thread(
+                lambda: list(agent_graph.stream(graph_input))
+            )
+
+            for output in outputs:
+                for _node_name, node_output in output.items():
+                    if "final_response" in node_output:
+                        chunk = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": "agent",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "content": node_output["final_response"],
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
+            # Final chunk with finish_reason
+            done_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": "agent",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(done_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            log.error("Streaming error: %s", e)
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         generate(),
