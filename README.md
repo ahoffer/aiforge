@@ -53,18 +53,6 @@ API endpoints:
 
 Build: `cd images/agent && ./build.sh` then `kubectl apply -f k8s/`
 
-## MCP Tool Servers
-
-Five servers in `mcp-servers.json` extend tool-capable frontends.
-
-| Server | Capability |
-|--------|-----------|
-| searxng | Web search via SearXNG metasearch |
-| filesystem | Read/write access to home directory |
-| git | Repository inspection, history, branches |
-| shell | Whitelisted commands: ls, grep, find, python3, node, make, kubectl |
-| fetch | HTTP URL content retrieval |
-
 ## Configuration
 
 Launcher scripts source `defaults.sh`. Override any variable at launch.
