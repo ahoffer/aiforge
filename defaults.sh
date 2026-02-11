@@ -9,17 +9,14 @@ OLLAMA_HOST="${OLLAMA_HOST:-http://bigfish:31434}"
 OLLAMA_URL="${OLLAMA_URL:-$OLLAMA_HOST}"
 
 # Base model pulled from Ollama registry
-AGENT_BASE_MODEL="${AGENT_BASE_MODEL:-qwen3:14b}"
+AGENT_BASE_MODEL="${AGENT_BASE_MODEL:-devstral:latest}"
 
 # Default tuned alias created by the Ollama postStart hook with baked-in verbosity controls.
 AGENT_MODEL="${AGENT_MODEL:-${AGENT_BASE_MODEL}-agent}"
 
 # Per-frontend model overrides. Set any of these to use a different model for that frontend.
-AIDER_MODEL="${AIDER_MODEL:-llama3.1:8b}"
-GOOSE_MODEL="${GOOSE_MODEL:-${AGENT_MODEL}}"
-OLLMCP_MODEL="${OLLMCP_MODEL:-mistral-nemo:latest}"
-OPENCODE_MODEL="${OPENCODE_MODEL:-${AGENT_BASE_MODEL}-16k}"
-OPENHANDS_MODEL="${OPENHANDS_MODEL:-mistral-nemo:latest}"
+GOOSE_MODEL="${GOOSE_MODEL:-${AGENT_BASE_MODEL}}"
+OPENCODE_MODEL="${OPENCODE_MODEL:-${AGENT_BASE_MODEL}}"
 
 # Response tuning parameters. Same defaults as the ConfigMap.
 AGENT_TEMPERATURE="${AGENT_TEMPERATURE:-0.7}"
@@ -29,11 +26,11 @@ AGENT_REPEAT_PENALTY="${AGENT_REPEAT_PENALTY:-1.2}"
 AGENT_SYSTEM_PROMPT="${AGENT_SYSTEM_PROMPT:-Be concise and direct. Avoid filler phrases. When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data for libraries, frameworks, or technical specifications. Search first, then answer.}"
 
 # Multi-agent system models
-INTERPRETER_MODEL="${INTERPRETER_MODEL:-qwen3:14b-agent}"
+INTERPRETER_MODEL="${INTERPRETER_MODEL:-${AGENT_MODEL}}"
 ORCHESTRATOR_MODEL="${ORCHESTRATOR_MODEL:-${AGENT_MODEL}}"
-RESEARCH_MODEL="${RESEARCH_MODEL:-qwen3:14b-agent}"
+RESEARCH_MODEL="${RESEARCH_MODEL:-${AGENT_MODEL}}"
 SYNTHESIS_MODEL="${SYNTHESIS_MODEL:-${AGENT_MODEL}}"
-CRITIC_MODEL="${CRITIC_MODEL:-qwen3:14b-agent}"
+CRITIC_MODEL="${CRITIC_MODEL:-${AGENT_MODEL}}"
 
 # RAG configuration
 QDRANT_URL="${QDRANT_URL:-http://bigfish:31333}"
