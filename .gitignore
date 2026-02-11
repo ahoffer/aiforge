@@ -3,3 +3,4 @@ __pycache__/
 .opencode/
 .serena/
 /.idea/
+/.venv/
