@@ -6,14 +6,9 @@ metadata:
   namespace: ai-agent
 data:
   OLLAMA_URL: "http://ollama:11434"
-  QDRANT_URL: "http://qdrant:6333"
   SEARXNG_URL: "http://searxng:8080"
-  EMBEDDING_MODEL: "nomic-embed-text"
-  INTERPRETER_MODEL: "qwen2.5:7b"
-  ORCHESTRATOR_MODEL: "qwen3:14b-agent"
-  RESEARCH_MODEL: "qwen2.5:7b"
-  SYNTHESIS_MODEL: "qwen3:14b-agent"
-  CRITIC_MODEL: "qwen2.5:7b"
+  AGENT_MODEL: "qwen3:14b-agent"
+  AGENT_MAX_TOKENS: "2048"
 ---
 apiVersion: apps/v1
 kind: Deployment

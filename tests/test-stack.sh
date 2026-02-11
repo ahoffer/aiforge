@@ -283,5 +283,31 @@ echo "         Generation: ${genTokens} tokens at ${genTps} tok/s"
 echo "         Prompt eval: ${promptTokens} tokens at ${promptTps} tok/s"
 echo ""
 
+# ---- Check 9: Agent service health ----
+echo "--- Agent Service Health ---"
+agentJson=$(curl -s --max-time 10 "$AGENT_URL/health" 2>/dev/null || echo "{}")
+agentStatus=$(echo "$agentJson" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    status = d.get('status', '')
+    services = d.get('services', {})
+    print(f'{status}|{json.dumps(services)}')
+except Exception:
+    print('unreachable|{}')
+" 2>/dev/null || echo "unreachable|{}")
+
+IFS='|' read -r agentHealthStatus agentServices <<< "$agentStatus"
+
+if [ "$agentHealthStatus" = "healthy" ]; then
+    report "Agent service healthy at $AGENT_URL" "true"
+elif [ "$agentHealthStatus" = "degraded" ]; then
+    report "Agent service degraded at $AGENT_URL" "true"
+    echo "         Services: $agentServices"
+else
+    report "Agent service at $AGENT_URL ($agentHealthStatus)" "false"
+fi
+echo ""
+
 # ---- Summary ----
 print_summary

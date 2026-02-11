@@ -9,6 +9,7 @@ OLLAMA_URL="${OLLAMA_URL:-http://localhost:31434}"
 SEARXNG_URL="${SEARXNG_URL:-http://localhost:31080}"
 QDRANT_URL="${QDRANT_URL:-http://localhost:31333}"
 OPENWEBUI_URL="${OPENWEBUI_URL:-http://localhost:31380}"
+AGENT_URL="${AGENT_URL:-http://localhost:31400}"
 
 passed=0
 failed=0
@@ -39,6 +40,7 @@ print_header() {
     echo "SearXNG URL:     $SEARXNG_URL"
     echo "Qdrant URL:      $QDRANT_URL"
     echo "Open WebUI URL:  $OPENWEBUI_URL"
+    echo "Agent URL:       $AGENT_URL"
     echo ""
 }
 

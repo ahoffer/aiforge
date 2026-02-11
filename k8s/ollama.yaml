@@ -54,10 +54,8 @@ spec:
               ollama serve &
               sleep 5
               until ollama list >/dev/null 2>&1; do sleep 2; done
-              # Pull base model for agent orchestration and synthesis
+              # Pull base model for agent tool calling
               timeout 600 ollama pull "$DEFAULT_MODEL" || echo "Model pull failed or timed out"
-              # Pull fast model for interpreter, research, and critic nodes
-              timeout 300 ollama pull qwen2.5:7b || echo "Fast model pull failed or timed out"
               # Pull embedding model for RAG
               timeout 120 ollama pull nomic-embed-text || echo "Embedding model pull failed or timed out"
           env:

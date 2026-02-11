@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "Building agent:latest image..."
-nerdctl build -t agent:latest .
+sudo nerdctl build -t agent:latest .
 
 echo "Build complete. Deploy with:"
 echo "  kubectl apply -f /projects/aiagent/k8s/"

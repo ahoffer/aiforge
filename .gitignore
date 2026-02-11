@@ -4,3 +4,5 @@ __pycache__/
 .serena/
 /.idea/
 /.venv/
+.pytest_cache/
+*.tar.gz

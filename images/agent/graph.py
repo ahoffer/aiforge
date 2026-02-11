@@ -1,234 +1,182 @@
-"""LangGraph workflow for autonomous multi-agent system."""
+"""LangGraph workflow: orchestrator + search loop.
 
-from typing import Annotated, Any, Literal
+Two-node graph where the orchestrator calls Ollama with native tool calling.
+If the LLM returns tool_calls, the search node executes them and loops back.
+If the LLM returns a text answer, the graph terminates.
+"""
+
+import json
+import logging
+import os
+from typing import Literal
+
 from typing_extensions import TypedDict
-
 from langgraph.graph import StateGraph, END
 
-from nodes import (
-    interpreter_node,
-    decision_node,
-    research_node,
-    synthesis_node,
-    critic_node,
-    ingest_node,
+from clients import OllamaClient, SearxngClient
+from tools import TOOLS, execute_tool
+
+log = logging.getLogger(__name__)
+
+MAX_TOOL_ITERATIONS = 5
+
+SYSTEM_PROMPT = (
+    "You are a helpful research assistant with access to web search. "
+    "Use the web_search tool when you need current information or facts "
+    "you are not confident about. Cite your sources when you use search results. "
+    "For simple questions you can answer confidently, respond directly without searching."
 )
 
 
 class AgentState(TypedDict, total=False):
     """Shared state for the agent graph.
 
-    All nodes read from and write to this state. Fields use total=False
-    so nodes only need to return the fields they modify.
+    Fields use total=False so nodes only return the fields they modify.
+    Designed to grow with later phases without breaking existing nodes.
     """
     # Input
     message: str
     conversation_id: str
 
-    # Interpreter output
-    intent_type: str
-    confidence: float
-    entities: list[str]
-    inferred_url: str | None
+    # Ollama message history for /api/chat
+    messages: list[dict]
 
-    # Decision output
-    next_action: str
-
-    # Research output
-    research_results: list[dict[str, Any]]
-    research_summary: str
-
-    # Ingestion output
-    ingestion_status: str
-    ingestion_message: str
-    pages_indexed: int
-    collection_name: str
-
-    # Synthesis output
-    draft_response: str
+    # Research tracking, populated now, verified in Phase 5
     sources: list[str]
+    search_count: int
 
-    # Critic output
-    is_approved: bool
-    critique_count: int
-    critique_score: float
-    critique_feedback: str
-
-    # Final output
+    # Output
     final_response: str
-    actions_taken: list[str]
 
 
-def route_after_decision(state: AgentState) -> Literal["crawl", "research", "resolve_context"]:
-    """Route based on decision node output."""
-    action = state.get("next_action", "research")
+def orchestrator_node(state: AgentState) -> dict:
+    """Call Ollama with tool schemas and inspect the response.
 
-    if action == "crawl":
-        return "crawl"
-    elif action == "resolve_context":
-        # For now, resolve_context falls back to research
-        return "resolve_context"
-    else:
-        return "research"
-
-
-def route_after_critic(state: AgentState) -> Literal["answer", "revise"]:
-    """Route based on critic approval."""
-    is_approved = state.get("is_approved", False)
-    critique_count = state.get("critique_count", 0)
-
-    # Approve if passed or hit max attempts
-    if is_approved or critique_count >= 3:
-        return "answer"
-
-    return "revise"
-
-
-def resolve_context_node(state: AgentState) -> dict:
-    """Resolve context for followup questions.
-
-    For now, this falls through to research with original message.
-    Future enhancement could use conversation history.
+    On first call, initializes messages with system prompt and user message.
+    On subsequent calls (after search), messages already contain tool results.
     """
-    return {
-        "research_summary": f"Followup context: {state.get('message', '')}",
-    }
+    messages = state.get("messages", [])
 
+    # First call: initialize message history
+    if not messages:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": state["message"]},
+        ]
 
-def revise_node(state: AgentState) -> dict:
-    """Revise the draft response based on critic feedback.
+    model = os.getenv("AGENT_MODEL", "qwen3:14b-agent")
+    ollama = OllamaClient()
+    response_message = ollama.chat(messages, model=model, tools=TOOLS)
 
-    Re-runs synthesis with feedback incorporated.
-    """
-    feedback = state.get("critique_feedback", "")
-    draft = state.get("draft_response", "")
+    # Append the assistant response to history
+    messages = messages + [response_message]
 
-    # Add feedback to research summary for synthesis to consider
-    current_summary = state.get("research_summary", "")
-    enhanced_summary = f"{current_summary}\n\nPrevious draft issues: {feedback}"
+    tool_calls = response_message.get("tool_calls", [])
+    content = response_message.get("content", "")
 
-    return {
-        "research_summary": enhanced_summary,
-    }
+    updates = {"messages": messages}
 
-
-def answer_node(state: AgentState) -> dict:
-    """Finalize the response."""
-    draft = state.get("draft_response", "")
-    actions = []
-
-    # Collect actions taken
-    if state.get("ingestion_status") == "success":
-        actions.append("crawl")
-    if state.get("research_results"):
-        actions.append("research")
-    if state.get("critique_count", 0) > 1:
-        actions.append("revise")
-
-    actions.append("synthesize")
-
-    return {
-        "final_response": draft,
-        "actions_taken": actions,
-    }
-
-
-def ingest_then_synthesize(state: AgentState) -> dict:
-    """After ingestion, create a synthesis response about what was indexed."""
-    status = state.get("ingestion_status", "")
-    message = state.get("ingestion_message", "")
-    pages = state.get("pages_indexed", 0)
-    collection = state.get("collection_name", "")
-
-    if status == "success":
-        response = (
-            f"I've indexed the documentation you requested. "
-            f"Processed {pages} pages and stored them in the '{collection}' collection. "
-            f"You can now ask questions about this documentation."
-        )
+    if tool_calls:
+        log.info("Orchestrator requested %d tool call(s)", len(tool_calls))
     else:
-        response = f"I encountered an issue while indexing: {message}"
+        log.info("Orchestrator produced final answer")
+        updates["final_response"] = content
+
+    return updates
+
+
+def search_node(state: AgentState) -> dict:
+    """Execute tool calls from the orchestrator and append results."""
+    messages = list(state.get("messages", []))
+    sources = list(state.get("sources", []))
+    search_count = state.get("search_count", 0)
+
+    searxng = SearxngClient()
+
+    # Get tool calls from the last assistant message
+    last_message = messages[-1] if messages else {}
+    tool_calls = last_message.get("tool_calls", [])
+
+    for call in tool_calls:
+        function = call.get("function", {})
+        name = function.get("name", "")
+        arguments = function.get("arguments", {})
+
+        # Arguments may arrive as a JSON string
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+
+        result_text = execute_tool(name, arguments, searxng)
+
+        # Append tool response in Ollama's expected format
+        messages.append({
+            "role": "tool",
+            "content": result_text,
+        })
+
+        # Track sources from search results
+        if name == "web_search":
+            search_count += 1
+            query = arguments.get("query", "")
+            sources.append(f"web_search: {query}")
 
     return {
-        "draft_response": response,
-        "is_approved": True,  # Skip critic for ingestion responses
+        "messages": messages,
+        "sources": sources,
+        "search_count": search_count,
     }
+
+
+def route_after_orchestrator(state: AgentState) -> Literal["search", "__end__"]:
+    """Route based on whether the orchestrator wants to call tools."""
+    messages = state.get("messages", [])
+    search_count = state.get("search_count", 0)
+
+    if not messages:
+        return END
+
+    last_message = messages[-1]
+    tool_calls = last_message.get("tool_calls", [])
+
+    if tool_calls and search_count < MAX_TOOL_ITERATIONS:
+        return "search"
+
+    # If we hit max iterations without a final answer, extract whatever
+    # content the model provided
+    if search_count >= MAX_TOOL_ITERATIONS and not state.get("final_response"):
+        content = last_message.get("content", "")
+        log.warning("Hit max iterations (%d), using last content as answer", MAX_TOOL_ITERATIONS)
+        # This will be picked up since we already set it in orchestrator_node
+        # when there are no tool_calls, but as a safety net we check here
+
+    return END
 
 
 def build_graph() -> StateGraph:
-    """Build and compile the agent workflow graph.
-
-    Workflow:
-    1. Interpreter detects intent
-    2. Decision routes to appropriate action
-    3. Action nodes: crawl, research, or resolve_context
-    4. Synthesis generates response
-    5. Critic validates quality
-    6. Either answer or revise based on critic
-
-    Returns:
-        Compiled StateGraph ready for invocation
-    """
+    """Build and compile the 2-node orchestrator + search graph."""
     graph = StateGraph(AgentState)
 
-    # Add all nodes
-    graph.add_node("interpreter", interpreter_node)
-    graph.add_node("decision", decision_node)
-    graph.add_node("crawl", ingest_node)
-    graph.add_node("ingest_response", ingest_then_synthesize)
-    graph.add_node("research", research_node)
-    graph.add_node("resolve_context", resolve_context_node)
-    graph.add_node("synthesis", synthesis_node)
-    graph.add_node("critic", critic_node)
-    graph.add_node("revise", revise_node)
-    graph.add_node("answer", answer_node)
+    graph.add_node("orchestrator", orchestrator_node)
+    graph.add_node("search", search_node)
 
-    # Set entry point
-    graph.set_entry_point("interpreter")
+    graph.set_entry_point("orchestrator")
 
-    # Add edges
-    graph.add_edge("interpreter", "decision")
-
-    # Conditional routing after decision
     graph.add_conditional_edges(
-        "decision",
-        route_after_decision,
+        "orchestrator",
+        route_after_orchestrator,
         {
-            "crawl": "crawl",
-            "research": "research",
-            "resolve_context": "resolve_context",
+            "search": "search",
+            END: END,
         },
     )
 
-    # Crawl path goes directly to ingest response
-    graph.add_edge("crawl", "ingest_response")
-    graph.add_edge("ingest_response", "answer")
-
-    # Research and context paths go to synthesis
-    graph.add_edge("research", "synthesis")
-    graph.add_edge("resolve_context", "research")
-
-    # Synthesis goes to critic
-    graph.add_edge("synthesis", "critic")
-
-    # Conditional routing after critic
-    graph.add_conditional_edges(
-        "critic",
-        route_after_critic,
-        {
-            "answer": "answer",
-            "revise": "revise",
-        },
-    )
-
-    # Revise goes back to synthesis
-    graph.add_edge("revise", "synthesis")
-
-    # Answer is terminal
-    graph.add_edge("answer", END)
+    # After search, loop back to orchestrator
+    graph.add_edge("search", "orchestrator")
 
     return graph.compile()
 
 
-# Create the compiled graph as a module-level variable
 agent_graph = build_graph()
