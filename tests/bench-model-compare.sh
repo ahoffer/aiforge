@@ -363,13 +363,13 @@ for model in "${MODELS[@]}"; do
     echo "  --- E2E: $model ---"
 
     echo "  Patching ConfigMap to ${aliasName}..."
-    kubectl patch configmap agent-config -n aiforge \
+    kubectl patch configmap proteus-config -n aiforge \
         --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${aliasName}\"}}" \
         > /dev/null 2>&1
 
     echo "  Restarting agent deployment..."
-    kubectl rollout restart deployment/agent -n aiforge > /dev/null 2>&1
-    kubectl rollout status deployment/agent -n aiforge --timeout=120s 2>/dev/null || true
+    kubectl rollout restart deployment/proteus -n aiforge > /dev/null 2>&1
+    kubectl rollout status deployment/proteus -n aiforge --timeout=120s 2>/dev/null || true
 
     # Wait a few seconds for readiness probe
     sleep 5
@@ -408,12 +408,12 @@ done
 
 # Restore original model
 echo "  Restoring ConfigMap to ${ORIGINAL_MODEL}..."
-kubectl patch configmap agent-config -n aiforge \
+kubectl patch configmap proteus-config -n aiforge \
     --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${ORIGINAL_MODEL}\"}}" \
     > /dev/null 2>&1
-kubectl rollout restart deployment/agent -n aiforge > /dev/null 2>&1
-kubectl rollout status deployment/agent -n aiforge --timeout=120s 2>/dev/null || true
-echo "  Agent restored to ${ORIGINAL_MODEL}."
+kubectl rollout restart deployment/proteus -n aiforge > /dev/null 2>&1
+kubectl rollout status deployment/proteus -n aiforge --timeout=120s 2>/dev/null || true
+echo "  Proteus restored to ${ORIGINAL_MODEL}."
 echo ""
 
 # ---- Section 6: Comparison summary table ----

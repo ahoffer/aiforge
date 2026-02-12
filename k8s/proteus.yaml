@@ -1,8 +1,8 @@
-# ---------- Multi-Agent System ----------
+# ---------- Proteus Smart Proxy ----------
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agent-config
+  name: proteus-config
   namespace: aiforge
 data:
   OLLAMA_URL: "http://ollama:11434"
@@ -13,7 +13,7 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agent
+  name: proteus
   namespace: aiforge
 spec:
   replicas: 1
@@ -21,21 +21,21 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: agent
+      app: proteus
   template:
     metadata:
       labels:
-        app: agent
+        app: proteus
     spec:
       containers:
-        - name: agent
-          image: agent:latest
+        - name: proteus
+          image: proteus:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef:
-                name: agent-config
+                name: proteus-config
           resources:
             requests:
               memory: 256Mi
@@ -58,11 +58,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: agent
+  name: proteus
   namespace: aiforge
 spec:
   selector:
-    app: agent
+    app: proteus
   ports:
     - name: http
       port: 8000
