@@ -9,9 +9,6 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-# Two levels up from tests/tests/ to reach images/proteus/ where source modules live
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-
 # Set before graph import so module-level AGENT_NUM_CTX picks it up.
 os.environ.setdefault("AGENT_NUM_CTX", "16384")
 

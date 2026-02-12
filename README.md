@@ -99,13 +99,13 @@ clients can display accurate token counts.
 
 ## Testing
 
-- `test-stack.sh` - health, inference, tool calling, token speed
-- `test-services.sh` - Qdrant CRUD, SearXNG, embeddings
+- `test-stack.sh` - SearXNG, Qdrant, and Proteus health checks
+- `test-services.sh` - Qdrant CRUD and SearXNG search
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
 - `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/chat`
 - `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories (targets Ollama directly, not Proteus)
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
-- `images/proteus/tests/` - unit tests (pytest)
+- `tests/test_*.py` - unit tests (pytest)
 
 ```bash
 ./tests/test-stack.sh
@@ -113,7 +113,7 @@ clients can display accurate token counts.
 ./tests/test-agent.sh
 ./tests/test-proxy-web-search-smoke.sh
 python3 tests/test-tool-calling.py
-cd images/proteus && python3 -m pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
 
 Override target model or URL: `MODEL=qwen3:8b ./tests/test-stack.sh`

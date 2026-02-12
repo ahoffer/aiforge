@@ -6,9 +6,6 @@ from unittest.mock import patch, MagicMock
 
 import requests
 
-# Two levels up from tests/tests/ to reach images/proteus/ where source modules live
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-
 from clients import OllamaClient, QdrantClient, SearxngClient
 
 
