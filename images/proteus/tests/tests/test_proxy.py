@@ -25,6 +25,7 @@ from proteus import (
     _reconstruct_message_from_chunks,
     _clean_for_ollama,
     _ensure_proxy_system_prompt,
+    _resolve_tool_choice,
     _search_intent_for_latest_user,
     _msg_to_dict,
     OpenAIMessage,
@@ -62,6 +63,32 @@ class TestProxySystemPrompt:
         assert updated[0]["role"] == "system"
         assert PROXY_POLICY_MARKER in updated[0]["content"]
         assert "You are terse." in updated[0]["content"]
+
+
+class TestToolChoiceResolution:
+
+    def test_forces_web_search_on_first_search_iteration(self):
+        messages = [{"role": "user", "content": "Who won the Superbowl in 2026?"}]
+        merged_tools = [WEB_SEARCH_TOOL]
+        tc = _resolve_tool_choice(None, messages, iteration=0, merged_tools=merged_tools)
+        assert isinstance(tc, dict)
+        assert tc["function"]["name"] == "web_search"
+
+    def test_honors_explicit_requested_tool_choice(self):
+        requested = {"type": "function", "function": {"name": "list_files"}}
+        messages = [{"role": "user", "content": "latest python version"}]
+        merged_tools = [WEB_SEARCH_TOOL]
+        tc = _resolve_tool_choice(requested, messages, iteration=0, merged_tools=merged_tools)
+        assert tc == requested
+
+    def test_does_not_force_after_internal_search_result_exists(self):
+        messages = [
+            {"role": "user", "content": "latest python version"},
+            {"role": "tool", "content": "Search results", "_internal": True},
+        ]
+        merged_tools = [WEB_SEARCH_TOOL]
+        tc = _resolve_tool_choice(None, messages, iteration=1, merged_tools=merged_tools)
+        assert tc is None
 
 
 class TestMergeWebSearch:

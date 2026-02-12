@@ -84,7 +84,7 @@ EOF
 
 if command -v curl &>/dev/null; then
     models_json="$(curl -fsS --max-time 3 "${AGENT_URL}/v1/models" 2>/dev/null || true)"
-    if [[ -n "$models_json" ]] && ! grep -q '"id": "proteus"' <<< "$models_json"; then
+    if [[ -n "$models_json" ]] && ! grep -Eq '"id"[[:space:]]*:[[:space:]]*"proteus"' <<< "$models_json"; then
         echo "Error: AGENT_URL does not appear to be Proteus (missing model id=proteus): $AGENT_URL"
         exit 1
     fi

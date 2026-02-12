@@ -75,6 +75,7 @@ Cluster-side settings live in ConfigMaps in `proteus.yaml`.
 - `test-stack.sh` - health, inference, tool calling, token speed
 - `test-services.sh` - Qdrant CRUD, SearXNG, Open WebUI, embeddings, cross-service wiring
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
+- `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/v1/chat/completions`
 - `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
 - `images/proteus/tests/` - unit tests (pytest)
@@ -83,6 +84,7 @@ Cluster-side settings live in ConfigMaps in `proteus.yaml`.
 ./tests/test-stack.sh
 ./tests/test-services.sh
 ./tests/test-agent.sh
+./tests/test-proxy-web-search-smoke.sh
 python3 tests/test-tool-calling.py
 cd images/proteus && python3 -m pytest tests/ -v
 ```

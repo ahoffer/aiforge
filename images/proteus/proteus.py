@@ -249,6 +249,43 @@ def _ensure_proxy_system_prompt(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": policy}, *messages]
 
 
+def _has_internal_web_search_result(messages: list[dict]) -> bool:
+    """True if proxy has already executed at least one internal web_search."""
+    for msg in messages:
+        if msg.get("role") == "tool" and msg.get("_internal"):
+            return True
+    return False
+
+
+def _resolve_tool_choice(
+    requested_tool_choice: str | dict | None,
+    messages: list[dict],
+    iteration: int,
+    merged_tools: list[dict],
+) -> str | dict | None:
+    """Resolve tool_choice for an Ollama OpenAI-compatible call."""
+    if requested_tool_choice is not None:
+        return requested_tool_choice
+
+    intent = _search_intent_for_latest_user(messages)
+    has_search_tool = any(
+        t.get("function", {}).get("name") == "web_search" for t in merged_tools
+    )
+
+    if (
+        intent == "search"
+        and has_search_tool
+        and iteration == 0
+        and not _has_internal_web_search_result(messages)
+    ):
+        return {
+            "type": "function",
+            "function": {"name": "web_search"},
+        }
+
+    return None
+
+
 def _partition_tool_calls(calls: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split tool calls into (web_search_calls, client_calls)."""
     web_calls = []
@@ -525,6 +562,9 @@ async def _proxy_non_streaming(request: OpenAIChatRequest):
             "stream": False,
             "tools": merged_tools,
         }
+        tool_choice = _resolve_tool_choice(request.tool_choice, messages, iteration, merged_tools)
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.max_tokens is not None:
@@ -612,6 +652,9 @@ async def _proxy_streaming(request: OpenAIChatRequest):
                 "stream": True,
                 "tools": merged_tools,
             }
+            tool_choice = _resolve_tool_choice(request.tool_choice, messages, iteration, merged_tools)
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
             if request.temperature is not None:
                 payload["temperature"] = request.temperature
             if request.max_tokens is not None:
