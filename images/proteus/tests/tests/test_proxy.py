@@ -4,6 +4,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 # Two levels up from tests/tests/ to reach images/proteus/ where source modules live
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -107,6 +109,35 @@ class TestOpenaiMessagesToOllama:
         converted = _openai_messages_to_ollama(messages)
         assert converted == messages
 
+    def test_rejects_invalid_json_arguments(self):
+        messages = [{
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_bad",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": "not valid json"},
+            }],
+        }]
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            _openai_messages_to_ollama(messages)
+        assert exc_info.value.status_code == 400
+        assert "web_search" in exc_info.value.detail
+
+    def test_rejects_empty_string_arguments(self):
+        messages = [{
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_empty",
+                "type": "function",
+                "function": {"name": "my_tool", "arguments": ""},
+            }],
+        }]
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            _openai_messages_to_ollama(messages)
+        assert exc_info.value.status_code == 400
+
 
 class TestOllamaToolCallsToOpenai:
 
@@ -155,3 +186,28 @@ class TestRetrieveModel:
         resp = self.client.get("/v1/models/nonexistent")
         assert resp.status_code == 404
         assert "nonexistent" in resp.json()["detail"]
+
+
+class TestMalformedToolCallsEndpoint:
+    """Verify that malformed tool_calls arguments return 400 at the endpoint level."""
+
+    client = TestClient(app)
+
+    def test_invalid_json_in_tool_call_returns_400(self):
+        resp = self.client.post("/v1/chat/completions", json={
+            "model": "proteus",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "web_search", "arguments": "{broken json"},
+                    }],
+                },
+                {"role": "tool", "content": "result", "tool_call_id": "call_1", "name": "web_search"},
+            ],
+        })
+        assert resp.status_code == 400
+        assert "Invalid JSON" in resp.json()["detail"]

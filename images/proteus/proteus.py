@@ -149,26 +149,32 @@ def _openai_messages_to_ollama(messages: list[dict]) -> list[dict]:
     """Convert OpenAI-format messages to Ollama format.
 
     Main difference: tool_calls[].function.arguments is a JSON string in
-    OpenAI but a dict in Ollama.
+    OpenAI but a dict in Ollama. Raises HTTPException 400 if arguments
+    contain invalid JSON.
     """
     converted = []
     for msg in messages:
         out = dict(msg)
         if "tool_calls" in out and out["tool_calls"]:
-            out["tool_calls"] = [
-                {
+            new_calls = []
+            for tc in out["tool_calls"]:
+                raw_args = tc["function"]["arguments"]
+                if isinstance(raw_args, str):
+                    try:
+                        parsed_args = json.loads(raw_args)
+                    except (json.JSONDecodeError, ValueError):
+                        fn_name = tc["function"].get("name", "unknown")
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid JSON in tool_calls arguments for function '{fn_name}'",
+                        )
+                else:
+                    parsed_args = raw_args
+                new_calls.append({
                     **tc,
-                    "function": {
-                        **tc["function"],
-                        "arguments": (
-                            json.loads(tc["function"]["arguments"])
-                            if isinstance(tc["function"]["arguments"], str)
-                            else tc["function"]["arguments"]
-                        ),
-                    },
-                }
-                for tc in out["tool_calls"]
-            ]
+                    "function": {**tc["function"], "arguments": parsed_args},
+                })
+            out["tool_calls"] = new_calls
         converted.append(out)
     return converted
 
@@ -365,12 +371,14 @@ async def openai_chat_completions(request: OpenAIChatRequest):
 
 
 async def _openai_non_streaming(request: OpenAIChatRequest):
+    # Validate and convert messages before acquiring the HTTP client so
+    # malformed input fails fast with 400 rather than touching resources.
+    messages = [_msg_to_dict(m) for m in request.messages]
+    ollama_messages = _openai_messages_to_ollama(messages)
+
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
-
-    messages = [_msg_to_dict(m) for m in request.messages]
-    ollama_messages = _openai_messages_to_ollama(messages)
     model = AGENT_MODEL if request.model in ("proteus", None) else request.model
 
     ollama_payload = {
@@ -421,12 +429,14 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
 
 
 async def _openai_streaming(request: OpenAIChatRequest):
+    # Validate and convert messages before acquiring the HTTP client so
+    # malformed input fails fast with 400 rather than touching resources.
+    messages = [_msg_to_dict(m) for m in request.messages]
+    ollama_messages = _openai_messages_to_ollama(messages)
+
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
-
-    messages = [_msg_to_dict(m) for m in request.messages]
-    ollama_messages = _openai_messages_to_ollama(messages)
     model = AGENT_MODEL if request.model in ("proteus", None) else request.model
 
     ollama_payload = {
