@@ -16,6 +16,3 @@ cd "$SCRIPT_DIR"
 
 echo "Building proteus:latest image..."
 sudo nerdctl build -t proteus:latest .
-
-echo "Build complete. Deploy with:"
-echo "  kubectl rollout restart deploy/proteus -n aiforge"

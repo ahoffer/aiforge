@@ -19,16 +19,49 @@ sys.modules.setdefault("graph", MagicMock())
 
 from proteus import (
     SessionStore,
+    PROXY_POLICY_MARKER,
     _merge_web_search,
     _partition_tool_calls,
     _reconstruct_message_from_chunks,
     _clean_for_ollama,
+    _ensure_proxy_system_prompt,
+    _search_intent_for_latest_user,
     _msg_to_dict,
     OpenAIMessage,
     OpenAIToolCall,
     OpenAIFunctionCall,
 )
 from tools import WEB_SEARCH_TOOL
+
+
+class TestProxySystemPrompt:
+
+    def test_search_intent_detects_current_info_prompt(self):
+        messages = [{"role": "user", "content": "What is the latest Python release?"}]
+        assert _search_intent_for_latest_user(messages) == "search"
+
+    def test_search_intent_detects_stable_fact_prompt(self):
+        messages = [{"role": "user", "content": "What is 2 + 2?"}]
+        assert _search_intent_for_latest_user(messages) == "nosearch"
+
+    def test_system_prompt_injected_once(self):
+        messages = [{"role": "user", "content": "What is the latest Go version?"}]
+        first = _ensure_proxy_system_prompt(messages)
+        second = _ensure_proxy_system_prompt(first)
+        marker_count = sum(
+            PROXY_POLICY_MARKER in str(m.get("content", "")) for m in second if m.get("role") == "system"
+        )
+        assert marker_count == 1
+
+    def test_existing_system_prompt_is_preserved_with_policy_prefix(self):
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Explain CAP theorem."},
+        ]
+        updated = _ensure_proxy_system_prompt(messages)
+        assert updated[0]["role"] == "system"
+        assert PROXY_POLICY_MARKER in updated[0]["content"]
+        assert "You are terse." in updated[0]["content"]
 
 
 class TestMergeWebSearch:

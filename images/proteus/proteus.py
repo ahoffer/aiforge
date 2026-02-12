@@ -38,6 +38,23 @@ log = logging.getLogger("proteus")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
 MAX_PROXY_ITERATIONS = 5
+PROXY_POLICY_MARKER = "[proteus_policy_v1]"
+PROXY_OPENAI_SYSTEM_PROMPT = (
+    f"{PROXY_POLICY_MARKER}\n"
+    "You are running behind the Proteus proxy.\n"
+    "Use the web_search tool for current, time-sensitive, or uncertain facts.\n"
+    "For stable, well-known facts, answer directly without web_search.\n"
+    "Do not claim you searched unless you actually called web_search."
+)
+
+SEARCH_CUE_WORDS = (
+    "latest", "current", "today", "this year", "yesterday", "breaking", "recent",
+    "release notes", "cve", "who won", "price", "stock", "version",
+)
+NO_SEARCH_CUE_WORDS = (
+    "2+2", "2 + 2", "capital of france", "explain cap theorem",
+    "difference between cmd and entrypoint", "python zip function",
+)
 
 # -- Native request/response models for Open WebUI --
 
@@ -187,6 +204,49 @@ def _merge_web_search(tools: list[dict] | None) -> list[dict]:
     if "web_search" not in names:
         tools.append(WEB_SEARCH_TOOL)
     return tools
+
+
+def _search_intent_for_latest_user(messages: list[dict]) -> str:
+    """Return search intent classification for the latest user message."""
+    latest_user = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            latest_user = str(msg.get("content", "")).lower()
+            break
+
+    if not latest_user:
+        return "neutral"
+    if any(cue in latest_user for cue in NO_SEARCH_CUE_WORDS):
+        return "nosearch"
+    if any(cue in latest_user for cue in SEARCH_CUE_WORDS):
+        return "search"
+    return "neutral"
+
+
+def _ensure_proxy_system_prompt(messages: list[dict]) -> list[dict]:
+    """Inject Proteus policy prompt once, with intent-specific guidance."""
+    for msg in messages:
+        if msg.get("role") == "system" and PROXY_POLICY_MARKER in str(msg.get("content", "")):
+            return messages
+
+    intent = _search_intent_for_latest_user(messages)
+    intent_line = ""
+    if intent == "search":
+        intent_line = "\nThe latest user request appears time-sensitive: call web_search before final answer."
+    elif intent == "nosearch":
+        intent_line = "\nThe latest user request appears stable: answer directly unless truly uncertain."
+
+    policy = f"{PROXY_OPENAI_SYSTEM_PROMPT}{intent_line}"
+
+    if messages and messages[0].get("role") == "system":
+        updated = list(messages)
+        first = dict(updated[0])
+        first_content = str(first.get("content", ""))
+        first["content"] = f"{policy}\n\n{first_content}" if first_content else policy
+        updated[0] = first
+        return updated
+
+    return [{"role": "system", "content": policy}, *messages]
 
 
 def _partition_tool_calls(calls: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -456,6 +516,7 @@ async def _proxy_non_streaming(request: OpenAIChatRequest):
     if session_id is None:
         session_id = uuid4().hex[:16]
         messages = client_messages
+    messages = _ensure_proxy_system_prompt(messages)
 
     for iteration in range(MAX_PROXY_ITERATIONS):
         payload = {
@@ -539,6 +600,7 @@ async def _proxy_streaming(request: OpenAIChatRequest):
     if session_id is None:
         session_id = uuid4().hex[:16]
         messages = client_messages
+    messages = _ensure_proxy_system_prompt(messages)
 
     async def generate():
         nonlocal messages

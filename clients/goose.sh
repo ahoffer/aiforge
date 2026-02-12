@@ -6,6 +6,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../defaults.sh"
+
+if [[ "$AGENT_URL" == *"ollama"* ]] || [[ "$AGENT_URL" == *":11434"* ]]; then
+    echo "Error: AGENT_URL must point to Proteus, not Ollama: $AGENT_URL"
+    exit 1
+fi
+
 export GOOSE_PROVIDER="${GOOSE_PROVIDER:-proteus}"
 export GOOSE_MODEL="${GOOSE_MODEL:-proteus}"
 export PROTEUS_API_KEY="not-needed"
@@ -75,6 +81,14 @@ extensions:
     envs:
       ALLOW_COMMANDS: "ls,cat,head,tail,grep,find,wc,sort,uniq,diff,git,python3,node,npm,make,kubectl,curl"
 EOF
+
+if command -v curl &>/dev/null; then
+    models_json="$(curl -fsS --max-time 3 "${AGENT_URL}/v1/models" 2>/dev/null || true)"
+    if [[ -n "$models_json" ]] && ! grep -q '"id": "proteus"' <<< "$models_json"; then
+        echo "Error: AGENT_URL does not appear to be Proteus (missing model id=proteus): $AGENT_URL"
+        exit 1
+    fi
+fi
 
 # Support both interactive session and non-interactive run modes.
 if [[ "${1:-}" == "run" ]]; then

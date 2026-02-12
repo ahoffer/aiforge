@@ -7,6 +7,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../defaults.sh"
 
+if [[ "$AGENT_URL" == *"ollama"* ]] || [[ "$AGENT_URL" == *":11434"* ]]; then
+    echo "Error: AGENT_URL must point to Proteus, not Ollama: $AGENT_URL"
+    exit 1
+fi
+
 if ! command -v opencode &>/dev/null; then
     echo "OpenCode not found. Installing..."
     curl -sL "https://github.com/opencode-ai/opencode/releases/latest/download/opencode-linux-x64.tar.gz" \
@@ -19,7 +24,8 @@ fi
 # Timeout set to 10s to handle slow first-run package downloads via uvx/npx.
 OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
 mkdir -p "$OPENCODE_CONFIG_DIR"
-cat > "$OPENCODE_CONFIG_DIR/opencode.json" <<EOF
+OPENCODE_CONFIG_FILE="${OPENCODE_CONFIG_DIR}/config.json"
+cat > "$OPENCODE_CONFIG_FILE" <<EOF
 {
   "\$schema": "https://opencode.ai/config.json",
   "provider": {
@@ -31,7 +37,8 @@ cat > "$OPENCODE_CONFIG_DIR/opencode.json" <<EOF
       },
       "models": {
         "proteus": {
-          "name": "proteus"
+          "name": "proteus",
+          "tools": true
         }
       }
     }
@@ -58,5 +65,16 @@ cat > "$OPENCODE_CONFIG_DIR/opencode.json" <<EOF
   }
 }
 EOF
+
+# Compatibility copy for older setups that still read opencode.json.
+cp "$OPENCODE_CONFIG_FILE" "$OPENCODE_CONFIG_DIR/opencode.json"
+
+if command -v curl &>/dev/null; then
+    models_json="$(curl -fsS --max-time 3 "${AGENT_URL}/v1/models" 2>/dev/null || true)"
+    if [[ -n "$models_json" ]] && ! grep -q '"id": "proteus"' <<< "$models_json"; then
+        echo "Error: AGENT_URL does not appear to be Proteus (missing model id=proteus): $AGENT_URL"
+        exit 1
+    fi
+fi
 
 exec opencode -m "proteus/proteus" "$@"
