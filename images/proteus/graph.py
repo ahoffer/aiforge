@@ -23,6 +23,7 @@ from tools import TOOLS, execute_tool
 
 set_debug(os.getenv("LANGGRAPH_DEBUG", "").lower() in ("1", "true"))
 log = logging.getLogger(__name__)
+LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() in ("1", "true")
 
 MAX_TOOL_ITERATIONS = 5
 
@@ -104,6 +105,15 @@ def orchestrator_node(state: AgentState) -> dict:
         log.info("Orchestrator model=%s ollama_time=%.1fs final_answer", model, elapsed)
         updates["final_response"] = content
 
+    if LOG_LANGGRAPH_OUTPUT:
+        preview = (updates.get("final_response", "") or "")[:200].replace("\n", " ")
+        log.info(
+            "LangGraph output node=orchestrator keys=%s tool_calls=%d final_preview=%r",
+            sorted(updates.keys()),
+            len(tool_calls),
+            preview,
+        )
+
     return updates
 
 
@@ -158,12 +168,21 @@ def tools_node(state: AgentState) -> dict:
             search_count += 1
             sources.append(f"web_search: {query}")
 
-    return {
+    updates = {
         "messages": messages,
         "sources": sources,
         "search_count": search_count,
         "tool_iterations": tool_iterations,
     }
+    if LOG_LANGGRAPH_OUTPUT:
+        log.info(
+            "LangGraph output node=tools keys=%s tool_iterations=%d search_count=%d sources=%d",
+            sorted(updates.keys()),
+            tool_iterations,
+            search_count,
+            len(sources),
+        )
+    return updates
 
 
 def route_after_orchestrator(state: AgentState) -> Literal["tools", "__end__"]:

@@ -38,6 +38,8 @@ log = logging.getLogger("proteus")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
 MAX_PROXY_ITERATIONS = 5
+LOG_TOOL_MESSAGES = os.getenv("PROTEUS_LOG_TOOL_MESSAGES", "false").lower() == "true"
+LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() == "true"
 PROXY_POLICY_MARKER = "[proteus_policy_v1]"
 PROXY_OPENAI_SYSTEM_PROMPT = (
     f"{PROXY_POLICY_MARKER}\n"
@@ -299,6 +301,30 @@ def _partition_tool_calls(calls: list[dict]) -> tuple[list[dict], list[dict]]:
     return web_calls, client_calls
 
 
+def _log_tool_message_shape(assistant_msg: dict, context: str):
+    """Log tool-call schema details for debugging tool result wiring."""
+    tool_calls = assistant_msg.get("tool_calls", []) or []
+    if not tool_calls:
+        return
+
+    first = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+    fn = first.get("function", {}) if isinstance(first, dict) else {}
+
+    log.info(
+        "%s tool_message_shape tool_calls=%d first_keys=%s first_id=%s function_keys=%s function_name=%s",
+        context,
+        len(tool_calls),
+        sorted(first.keys()),
+        first.get("id", ""),
+        sorted(fn.keys()) if isinstance(fn, dict) else [],
+        fn.get("name", "") if isinstance(fn, dict) else "",
+    )
+
+    if LOG_TOOL_MESSAGES:
+        raw = json.dumps(assistant_msg, ensure_ascii=True)[:4000]
+        log.info("%s tool_message_raw=%s", context, raw)
+
+
 def _execute_web_searches(web_calls: list[dict], searxng: SearxngClient) -> list[dict]:
     """Execute web_search tool calls and return tool response messages."""
     tool_messages = []
@@ -452,6 +478,15 @@ async def chat(request: ChatRequest):
             "message": request.message,
             "conversation_id": conversation_id,
         })
+        if LOG_LANGGRAPH_OUTPUT:
+            preview = (result.get("final_response", "") or "")[:200].replace("\n", " ")
+            log.info(
+                "LangGraph /chat result conversation_id=%s keys=%s search_count=%s final_preview=%r",
+                conversation_id,
+                sorted(result.keys()),
+                result.get("search_count", 0),
+                preview,
+            )
 
         return ChatResponse(
             response=result.get("final_response", ""),
@@ -481,6 +516,18 @@ async def chat_stream(request: ChatRequest):
             )
             for output in outputs:
                 for node_name, node_output in output.items():
+                    if LOG_LANGGRAPH_OUTPUT:
+                        keys = sorted(node_output.keys()) if isinstance(node_output, dict) else []
+                        preview = ""
+                        if isinstance(node_output, dict):
+                            preview = (node_output.get("final_response", "") or "")[:160].replace("\n", " ")
+                        log.info(
+                            "LangGraph /chat/stream node=%s conversation_id=%s keys=%s final_preview=%r",
+                            node_name,
+                            conversation_id,
+                            keys,
+                            preview,
+                        )
                     yield f"event: node\ndata: {node_name}\n\n"
 
                     if "final_response" in node_output:
@@ -595,6 +642,7 @@ async def _proxy_non_streaming(request: OpenAIChatRequest):
         tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
         log.info("Iteration %d ollama_time=%.1fs tool_calls=%s finish=%s",
                  iteration + 1, elapsed, tool_names or "none", finish_reason)
+        _log_tool_message_shape(assistant_msg, f"Iteration {iteration + 1}")
 
         messages.append(assistant_msg)
 
@@ -706,6 +754,7 @@ async def _proxy_streaming(request: OpenAIChatRequest):
             tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
             log.info("Stream iteration %d ollama_time=%.1fs tool_calls=%s",
                      iteration + 1, elapsed, tool_names or "none")
+            _log_tool_message_shape(assistant_msg, f"Stream iteration {iteration + 1}")
 
             if not tool_calls:
                 messages.append(assistant_msg)
