@@ -44,13 +44,17 @@ kubectl -n "$NS" rollout status deploy/proteus
 # installer and verify each step rather than relying on background hooks.
 echo "Warming up model on GPU (this may take a minute)..."
 MODEL=$(kubectl -n "$NS" get configmap ollama-config -o jsonpath='{.data.DEFAULT_MODEL}')
-OLLAMA_POD=$(kubectl -n "$NS" get pod -l app=ollama -o jsonpath='{.items[0].metadata.name}')
 WARM=false
 
-# Ensure tuned alias exists.
-if ! kubectl -n "$NS" exec "$OLLAMA_POD" -- ollama show "${MODEL}-agent" >/dev/null 2>&1; then
-  echo "  Creating model alias ${MODEL}-agent..."
-  if ! kubectl -n "$NS" exec "$OLLAMA_POD" -- /bin/sh -c '
+# Re-resolve on every iteration so a pod restart does not strand us on a dead name.
+resolve_ollama_pod() {
+  kubectl -n "$NS" get pod -l app=ollama \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+}
+
+create_model_alias() {
+  kubectl -n "$NS" exec "$1" -- /bin/sh -c '
       {
         echo "FROM ${DEFAULT_MODEL}"
         echo "PARAMETER temperature ${AGENT_TEMPERATURE}"
@@ -60,14 +64,20 @@ if ! kubectl -n "$NS" exec "$OLLAMA_POD" -- ollama show "${MODEL}-agent" >/dev/n
         printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
       } > /tmp/Modelfile
       ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile >/dev/null
-    '; then
-    echo "  Warning: model alias creation command failed; continuing to retry."
-  fi
-fi
+    '
+}
 
 for i in $(seq 1 18); do
+  OLLAMA_POD=$(resolve_ollama_pod)
+  if [ -z "$OLLAMA_POD" ]; then
+    echo "  No running Ollama pod found (attempt $i/18)..."
+    sleep 10
+    continue
+  fi
+
   if ! kubectl -n "$NS" exec "$OLLAMA_POD" -- ollama show "${MODEL}-agent" >/dev/null 2>&1; then
-    echo "  Waiting for model alias (attempt $i/18)..."
+    echo "  Creating model alias ${MODEL}-agent (attempt $i/18)..."
+    create_model_alias "$OLLAMA_POD" 2>/dev/null || true
     sleep 10
     continue
   fi

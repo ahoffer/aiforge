@@ -32,6 +32,7 @@ from proteus import (
     _openai_messages_to_ollama,
     _ollama_tool_calls_to_openai,
     _build_ollama_options,
+    _SENTINEL,
     OpenAIMessage,
     OpenAIToolCall,
     OpenAIFunctionCall,
@@ -256,3 +257,236 @@ class TestMalformedStreamChunks:
         assert "data: [DONE]" in events
         # Malformed line should not leak into the response
         assert "this is not json" not in events
+
+
+class TestToolChoiceForwarding:
+    """Verify that tool_choice is forwarded to the Ollama payload."""
+
+    def _ollama_ok_response(self):
+        """Build a mock httpx.Response that looks like a successful Ollama reply."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "message": {"role": "assistant", "content": "ok"},
+            "done": True,
+        }
+        return mock_resp
+
+    def _base_request(self, **extra):
+        return {
+            "model": "proteus",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}],
+            **extra,
+        }
+
+    @pytest.mark.anyio
+    async def test_non_streaming_forwards_tool_choice_string(self):
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_ok_response()
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post(
+                "/v1/chat/completions",
+                json=self._base_request(tool_choice="required"),
+            )
+
+        assert resp.status_code == 200
+        payload = mock_http.post.call_args[1]["json"]
+        assert payload["tool_choice"] == "required"
+
+    @pytest.mark.anyio
+    async def test_non_streaming_forwards_tool_choice_dict(self):
+        choice = {"type": "function", "function": {"name": "t"}}
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_ok_response()
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post(
+                "/v1/chat/completions",
+                json=self._base_request(tool_choice=choice),
+            )
+
+        assert resp.status_code == 200
+        payload = mock_http.post.call_args[1]["json"]
+        assert payload["tool_choice"] == choice
+
+    @pytest.mark.anyio
+    async def test_non_streaming_omits_tool_choice_when_absent(self):
+        mock_http = AsyncMock()
+        mock_http.post.return_value = self._ollama_ok_response()
+
+        with TestClient(app) as client:
+            app.state.http = mock_http
+            resp = client.post(
+                "/v1/chat/completions",
+                json=self._base_request(),
+            )
+
+        assert resp.status_code == 200
+        payload = mock_http.post.call_args[1]["json"]
+        assert "tool_choice" not in payload
+
+    @pytest.mark.anyio
+    async def test_streaming_forwards_tool_choice(self):
+        lines = ['{"message": {"content": ""}, "done": true}']
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = mock_aiter_lines
+
+        captured_payload = {}
+
+        @asynccontextmanager
+        async def mock_stream(method, url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            yield mock_resp
+
+        with TestClient(app) as client:
+            app.state.http.stream = mock_stream
+            resp = client.post(
+                "/v1/chat/completions",
+                json=self._base_request(stream=True, tool_choice="none"),
+            )
+
+        assert resp.status_code == 200
+        assert captured_payload["tool_choice"] == "none"
+
+    @pytest.mark.anyio
+    async def test_streaming_omits_tool_choice_when_absent(self):
+        lines = ['{"message": {"content": ""}, "done": true}']
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_resp = AsyncMock()
+        mock_resp.status_code = 200
+        mock_resp.aiter_lines = mock_aiter_lines
+
+        captured_payload = {}
+
+        @asynccontextmanager
+        async def mock_stream(method, url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            yield mock_resp
+
+        with TestClient(app) as client:
+            app.state.http.stream = mock_stream
+            resp = client.post(
+                "/v1/chat/completions",
+                json=self._base_request(stream=True),
+            )
+
+        assert resp.status_code == 200
+        assert "tool_choice" not in captured_payload
+
+
+class TestChatStream:
+    """Verify that /chat/stream yields SSE events incrementally via the queue bridge."""
+
+    def _parse_sse_events(self, text):
+        """Parse SSE text into a list of (event_type, data) tuples."""
+        events = []
+        for block in text.strip().split("\n\n"):
+            event_type = None
+            data = None
+            for line in block.split("\n"):
+                if line.startswith("event: "):
+                    event_type = line[len("event: "):]
+                elif line.startswith("data: "):
+                    data = line[len("data: "):]
+            if event_type is not None:
+                events.append((event_type, data))
+        return events
+
+    def test_events_arrive_in_order(self):
+        """Two node outputs should produce node and response events in order,
+        ending with a done event."""
+        def mock_stream(*args, **kwargs):
+            yield {"orchestrator": {"messages": ["thinking..."]}}
+            yield {"orchestrator": {"final_response": "the answer"}}
+
+        import proteus
+        original = proteus.agent_graph
+        mock_graph = MagicMock()
+        mock_graph.stream = mock_stream
+
+        try:
+            proteus.agent_graph = mock_graph
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/chat/stream",
+                    json={"message": "hello"},
+                )
+        finally:
+            proteus.agent_graph = original
+
+        assert resp.status_code == 200
+        events = self._parse_sse_events(resp.text)
+        event_types = [e[0] for e in events]
+
+        # First node output has no final_response, so just "node"
+        # Second node output has final_response, so "node" then "response"
+        assert event_types == ["node", "node", "response", "done"]
+        # The response event carries the answer
+        response_events = [e for e in events if e[0] == "response"]
+        assert response_events[0][1] == "the answer"
+
+    def test_error_propagation(self):
+        """An exception from agent_graph.stream should yield an error event."""
+        def mock_stream(*args, **kwargs):
+            raise RuntimeError("graph exploded")
+
+        import proteus
+        original = proteus.agent_graph
+        mock_graph = MagicMock()
+        mock_graph.stream = mock_stream
+
+        try:
+            proteus.agent_graph = mock_graph
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/chat/stream",
+                    json={"message": "hello"},
+                )
+        finally:
+            proteus.agent_graph = original
+
+        assert resp.status_code == 200
+        events = self._parse_sse_events(resp.text)
+        event_types = [e[0] for e in events]
+        assert "error" in event_types
+        error_data = [e[1] for e in events if e[0] == "error"][0]
+        assert "graph exploded" in error_data
+
+    def test_empty_graph_output(self):
+        """A graph that yields nothing should produce only a done event."""
+        def mock_stream(*args, **kwargs):
+            return iter([])
+
+        import proteus
+        original = proteus.agent_graph
+        mock_graph = MagicMock()
+        mock_graph.stream = mock_stream
+
+        try:
+            proteus.agent_graph = mock_graph
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/chat/stream",
+                    json={"message": "hello"},
+                )
+        finally:
+            proteus.agent_graph = original
+
+        assert resp.status_code == 200
+        events = self._parse_sse_events(resp.text)
+        assert len(events) == 1
+        assert events[0] == ("done", "complete")

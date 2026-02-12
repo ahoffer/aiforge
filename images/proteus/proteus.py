@@ -32,6 +32,9 @@ from clients import OllamaClient, SearxngClient
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434").rstrip("/")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "devstral:latest-agent")
+
+# Sentinel for the sync-to-async queue bridge in chat_stream
+_SENTINEL = object()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 PROXY_TIMEOUT = 300.0
 
@@ -292,19 +295,34 @@ async def chat_stream(request: ChatRequest):
     conversation_id = request.conversation_id or str(uuid4())
 
     async def generate():
-        try:
-            graph_input = {"message": request.message, "conversation_id": conversation_id}
-            outputs = await asyncio.to_thread(
-                lambda: list(
-                    agent_graph.stream(
-                        graph_input,
-                        config={"configurable": {"thread_id": conversation_id}},
-                    )
-                )
-            )
+        graph_input = {"message": request.message, "conversation_id": conversation_id}
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-            for output in outputs:
-                for node_name, node_output in output.items():
+        def _run_graph():
+            try:
+                for output in agent_graph.stream(
+                    graph_input,
+                    config={"configurable": {"thread_id": conversation_id}},
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, output)
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+
+        loop.run_in_executor(None, _run_graph)
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is _SENTINEL:
+                    break
+                if isinstance(item, Exception):
+                    yield f"event: error\ndata: {str(item)}\n\n"
+                    return
+
+                for node_name, node_output in item.items():
                     keys = sorted(node_output.keys()) if isinstance(node_output, dict) else []
                     preview = ""
                     if isinstance(node_output, dict):
@@ -388,6 +406,8 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     }
     if request.tools:
         ollama_payload["tools"] = request.tools
+    if request.tool_choice is not None:
+        ollama_payload["tool_choice"] = request.tool_choice
     opts = _build_ollama_options(request)
     if opts:
         ollama_payload["options"] = opts
@@ -446,6 +466,8 @@ async def _openai_streaming(request: OpenAIChatRequest):
     }
     if request.tools:
         ollama_payload["tools"] = request.tools
+    if request.tool_choice is not None:
+        ollama_payload["tool_choice"] = request.tool_choice
     opts = _build_ollama_options(request)
     if opts:
         ollama_payload["options"] = opts
