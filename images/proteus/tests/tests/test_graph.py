@@ -25,22 +25,23 @@ _mock_langchain_core_globals = MagicMock()
 sys.modules["langchain_core"] = _mock_langchain_core
 sys.modules["langchain_core.globals"] = _mock_langchain_core_globals
 
-# Mock client and tools modules to avoid pulling in dependencies
-_mock_clients = MagicMock()
-sys.modules["clients"] = _mock_clients
+# Save and mock client and tools modules to avoid pulling in dependencies.
+# Both are restored after the graph import so other test files get the real modules.
+_saved_clients = sys.modules.pop("clients", None)
+sys.modules["clients"] = MagicMock()
 
-# Save and mock the tools module, but restore it after graph import
-# so test_tools.py can import the real module
 _saved_tools = sys.modules.pop("tools", None)
-_mock_tools = MagicMock()
-sys.modules["tools"] = _mock_tools
+sys.modules["tools"] = MagicMock()
 
 import graph  # noqa: E402
 
-# Restore tools module so other test files get the real one
 del sys.modules["tools"]
 if _saved_tools is not None:
     sys.modules["tools"] = _saved_tools
+
+del sys.modules["clients"]
+if _saved_clients is not None:
+    sys.modules["clients"] = _saved_clients
 
 route_after_orchestrator = graph.route_after_orchestrator
 orchestrator_node = graph.orchestrator_node

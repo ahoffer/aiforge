@@ -13,7 +13,7 @@ if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
 if "tools" in sys.modules and isinstance(sys.modules["tools"], MagicMock):
     del sys.modules["tools"]
 
-from tools import WEB_SEARCH_TOOL, TOOLS, execute_tool
+from tools import WEB_SEARCH_TOOL, DEFAULT_TOOLS, execute_tool
 
 
 def test_web_search_tool_schema():
@@ -25,7 +25,7 @@ def test_web_search_tool_schema():
 
 
 def test_tools_list_contains_web_search():
-    names = [t["function"]["name"] for t in TOOLS]
+    names = [t["function"]["name"] for t in DEFAULT_TOOLS]
     assert "web_search" in names
 
 

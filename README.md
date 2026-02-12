@@ -16,7 +16,7 @@ Five services in the `aiforge` namespace.
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
 | Open WebUI | Browser chat interface | open-webui:8080 | :31380 |
-| Proteus | Smart proxy with server-side web search | proteus:8000 | :31400 |
+| Proteus | LangGraph agent with native tool calling | proteus:8000 | :31400 |
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ Local models sometimes misinterpret intent. Use explicit phrasing like "analyze 
 
 ## Proteus
 
-FastAPI app in `images/proteus/`, smart proxy that forwards requests to Ollama and intercepts `web_search` tool calls server-side via SearXNG. Client-defined tools (filesystem, git, shell) pass through transparently. Also runs a two-node LangGraph workflow for the native `/chat` endpoints.
+FastAPI app in `images/proteus/`. All endpoints run through a single two-node LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The orchestrator node calls the model, and the tools node dispatches tool calls and loops back until the model produces a final answer.
 
 API endpoints:
 
