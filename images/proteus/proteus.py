@@ -408,7 +408,9 @@ async def openai_chat_completions(request: OpenAIChatRequest):
     if not request.messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    log.info("POST /v1/chat/completions messages=%d stream=%s", len(request.messages), request.stream)
+    tools_count = len(request.tools) if request.tools else 0
+    log.info("POST /v1/chat/completions messages=%d tools=%d stream=%s",
+             len(request.messages), tools_count, request.stream)
 
     if request.stream:
         return await _openai_streaming(request)

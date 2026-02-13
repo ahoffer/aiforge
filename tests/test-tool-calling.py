@@ -475,7 +475,47 @@ MULTI_TURN_TESTS = [
     },
 ]
 
-ALL_TESTS = SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS + MULTI_TURN_TESTS
+# -- Tool count stress tests --
+# Sends the same prompt with list_files plus N-1 dummy tools to find
+# the model's ceiling for simultaneous tool schemas.
+
+def _makeDummyTool(index):
+    """Generate a trivially simple dummy tool schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": f"dummy_tool_{index}",
+            "description": f"Dummy tool number {index} that does nothing useful",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "Arbitrary input"
+                    }
+                },
+                "required": ["input"]
+            }
+        }
+    }
+
+
+TOOL_COUNT_STRESS_LEVELS = [5, 10, 15, 20, 30, 40, 50]
+
+TOOL_COUNT_STRESS_TESTS = []
+for n in TOOL_COUNT_STRESS_LEVELS:
+    dummyTools = [_makeDummyTool(i) for i in range(1, n)]
+    toolSet = [LIST_FILES_TOOL] + dummyTools
+    TOOL_COUNT_STRESS_TESTS.append({
+        "name": f"stress {n} tools",
+        "category": "tool_count_stress",
+        "prompt": "List all files in /tmp",
+        "tools": toolSet,
+        "validate": validateToolCallWithArg("list_files", "path", "/tmp"),
+    })
+
+
+ALL_TESTS = SINGLE_TOOL_TESTS + NO_TOOL_TESTS + MULTI_TOOL_TESTS + MULTI_TURN_TESTS + TOOL_COUNT_STRESS_TESTS
 
 
 def runTest(baseUrl, modelName, testCase):
@@ -636,7 +676,7 @@ def main():
     )
     parser.add_argument(
         "--category",
-        choices=["single_tool", "no_tool", "multi_tool", "multi_turn"],
+        choices=["single_tool", "no_tool", "multi_tool", "multi_turn", "tool_count_stress"],
         help="Run only tests in this category",
     )
     args = parser.parse_args()

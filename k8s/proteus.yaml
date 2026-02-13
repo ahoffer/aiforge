@@ -37,7 +37,7 @@ spec:
           type: Unconfined
       containers:
         - name: proteus
-          image: proteus:8ca5820cbd28
+          image: proteus:64c76e07fffe
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

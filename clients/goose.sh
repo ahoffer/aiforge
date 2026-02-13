@@ -49,30 +49,13 @@ cat > "$GOOSE_CONFIG_DIR/custom_providers/proteus.json" <<EOF
 EOF
 
 # Generate config with MCP extensions.
+# Feb 2025: stripped to shell-only. Devstral 24B drowns when given 47 tool
+# schemas from developer+filesystem+git+aiforge. Shell can do everything
+# through commands, web search via curl against SearXNG.
 cat > "$GOOSE_CONFIG_DIR/config.yaml" <<EOF
 GOOSE_PROVIDER: proteus
 GOOSE_MODEL: ${GOOSE_MODEL}
 extensions:
-  developer:
-    enabled: true
-    name: developer
-    type: builtin
-  filesystem:
-    enabled: true
-    name: filesystem
-    type: stdio
-    cmd: npx
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-filesystem"
-      - "/home/aaron"
-  git:
-    enabled: true
-    name: git
-    type: stdio
-    cmd: uvx
-    args:
-      - mcp-server-git
   shell:
     enabled: true
     name: shell
@@ -82,24 +65,6 @@ extensions:
       - mcp-shell-server
     envs:
       ALLOW_COMMANDS: "ls,cat,head,tail,grep,find,wc,sort,uniq,diff,git,python3,node,npm,make,kubectl,curl"
-  aiforge:
-    enabled: true
-    name: aiforge
-    type: stdio
-    cmd: uv
-    args:
-      - run
-      - --with
-      - mcp
-      - --with
-      - requests
-      - python3
-      - ${SCRIPT_DIR}/../mcp/aiforge-server.py
-    envs:
-      SEARXNG_URL: ${SEARXNG_URL}
-      QDRANT_URL: ${QDRANT_URL}
-      PROTEUS_URL: ${AGENT_URL}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
 EOF
 
 if command -v curl &>/dev/null; then
