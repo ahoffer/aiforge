@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test that verifies Proteus executes server-side web_search for
+# Smoke test that verifies Gateway executes server-side web_search for
 # a time-sensitive prompt on /chat.
 # Exit code: 0 on pass, 1 on failure.
 
@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test.env"
 
-print_header "Proteus Web Search Smoke Test"
+print_header "Gateway Web Search Smoke Test"
 
 if ! command -v kubectl >/dev/null 2>&1; then
     echo "kubectl is required for this smoke test."
@@ -41,25 +41,25 @@ try:
 except Exception:
     print("false")
 ')
-report "Proteus /chat returned content" "$response_ok"
+report "Gateway /chat returned content" "$response_ok"
 
 echo ""
-echo "--- Verify Proteus Server-Side web_search ---"
-log_lines=$(kubectl logs -n "$NS" deploy/proteus --since-time="$START_TIME" 2>/dev/null || true)
+echo "--- Verify Gateway Server-Side web_search ---"
+log_lines=$(kubectl logs -n "$NS" deploy/gateway --since-time="$START_TIME" 2>/dev/null || true)
 
 has_chat=$(echo "$log_lines" | grep -c 'POST /chat' 2>/dev/null || true)
 has_proxy_search=$(echo "$log_lines" | grep -c 'Executing web_search:' 2>/dev/null || true)
 
 if [ "$has_chat" -gt 0 ]; then
-    report "Proteus received /chat request" "true"
+    report "Gateway received /chat request" "true"
 else
-    report "Proteus received /chat request" "false"
+    report "Gateway received /chat request" "false"
 fi
 
 if [ "$has_proxy_search" -gt 0 ]; then
-    report "Proteus executed server-side web_search" "true"
+    report "Gateway executed server-side web_search" "true"
 else
-    report "Proteus executed server-side web_search" "false"
+    report "Gateway executed server-side web_search" "false"
     echo "         Prompt: $PROMPT"
     echo "         START_TIME=$START_TIME"
 fi

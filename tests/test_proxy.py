@@ -1,4 +1,4 @@
-"""Tests for Proteus OpenAI-compatible proxy functions and streaming."""
+"""Tests for gateway OpenAI-compatible proxy functions and streaming."""
 
 import json
 import os
@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Set before proteus import so module-level AGENT_NUM_CTX picks it up.
+# Set before gateway import so module-level AGENT_NUM_CTX picks it up.
 os.environ.setdefault("AGENT_NUM_CTX", "16384")
 
 # Ensure we have real modules (not mocks from test_graph)
 if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
     del sys.modules["clients"]
 
-# Mock langgraph and graph before importing proteus.py
+# Mock langgraph and graph before importing gateway.py
 _mock_langgraph = MagicMock()
 _mock_langgraph_graph = MagicMock()
 _mock_langgraph_graph.END = "__end__"
@@ -27,7 +27,7 @@ sys.modules.setdefault("langchain_core", MagicMock())
 sys.modules.setdefault("langchain_core.globals", MagicMock())
 sys.modules.setdefault("graph", MagicMock())
 
-from proteus import (
+from gateway import (
     _msg_to_dict,
     _openai_messages_to_ollama,
     _ollama_tool_calls_to_openai,
@@ -177,16 +177,16 @@ class TestRetrieveModel:
 
     client = TestClient(app)
 
-    def test_returns_proteus_model(self):
-        resp = self.client.get("/v1/models/proteus")
+    def test_returns_gateway_model(self):
+        resp = self.client.get("/v1/models/gateway")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["id"] == "proteus"
+        assert body["id"] == "gateway"
         assert body["object"] == "model"
         assert body["owned_by"] == "local"
 
     def test_includes_context_window(self):
-        resp = self.client.get("/v1/models/proteus")
+        resp = self.client.get("/v1/models/gateway")
         assert resp.status_code == 200
         assert resp.json()["context_window"] == 16384
 
@@ -214,7 +214,7 @@ class TestMalformedToolCallsEndpoint:
 
     def test_invalid_json_in_tool_call_returns_400(self):
         resp = self.client.post("/v1/chat/completions", json={
-            "model": "proteus",
+            "model": "gateway",
             "messages": [
                 {"role": "user", "content": "hi"},
                 {
@@ -259,7 +259,7 @@ class TestMalformedStreamChunks:
             resp = client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": "proteus",
+                    "model": "gateway",
                     "messages": [{"role": "user", "content": "hi"}],
                     "stream": True,
                 },
@@ -290,7 +290,7 @@ class TestToolChoiceForwarding:
 
     def _base_request(self, **extra):
         return {
-            "model": "proteus",
+            "model": "gateway",
             "messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}],
             **extra,
@@ -429,20 +429,20 @@ class TestChatStream:
             yield {"orchestrator": {"messages": ["thinking..."]}}
             yield {"orchestrator": {"final_response": "the answer"}}
 
-        import proteus
-        original = proteus.agent_graph
+        import gateway
+        original = gateway.agent_graph
         mock_graph = MagicMock()
         mock_graph.stream = mock_stream
 
         try:
-            proteus.agent_graph = mock_graph
+            gateway.agent_graph = mock_graph
             with TestClient(app) as client:
                 resp = client.post(
                     "/chat/stream",
                     json={"message": "hello"},
                 )
         finally:
-            proteus.agent_graph = original
+            gateway.agent_graph = original
 
         assert resp.status_code == 200
         events = self._parse_sse_events(resp.text)
@@ -460,20 +460,20 @@ class TestChatStream:
         def mock_stream(*args, **kwargs):
             raise RuntimeError("graph exploded")
 
-        import proteus
-        original = proteus.agent_graph
+        import gateway
+        original = gateway.agent_graph
         mock_graph = MagicMock()
         mock_graph.stream = mock_stream
 
         try:
-            proteus.agent_graph = mock_graph
+            gateway.agent_graph = mock_graph
             with TestClient(app) as client:
                 resp = client.post(
                     "/chat/stream",
                     json={"message": "hello"},
                 )
         finally:
-            proteus.agent_graph = original
+            gateway.agent_graph = original
 
         assert resp.status_code == 200
         events = self._parse_sse_events(resp.text)
@@ -487,20 +487,20 @@ class TestChatStream:
         def mock_stream(*args, **kwargs):
             return iter([])
 
-        import proteus
-        original = proteus.agent_graph
+        import gateway
+        original = gateway.agent_graph
         mock_graph = MagicMock()
         mock_graph.stream = mock_stream
 
         try:
-            proteus.agent_graph = mock_graph
+            gateway.agent_graph = mock_graph
             with TestClient(app) as client:
                 resp = client.post(
                     "/chat/stream",
                     json={"message": "hello"},
                 )
         finally:
-            proteus.agent_graph = original
+            gateway.agent_graph = original
 
         assert resp.status_code == 200
         events = self._parse_sse_events(resp.text)

@@ -1,6 +1,6 @@
 # Local AI Agent Stack
 
-Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search, and vector storage.
+Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search, vector storage, and LLM observability.
 
 ## Vision
 - The goal is agentic software development in which engineers supervise and guide AI agents rather than writing most code by hand.
@@ -8,14 +8,28 @@ Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search
 
 ## Architecture
 
-Four services in the `aiforge` namespace.
+Six services in the `aiforge` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|
 | Ollama | GPU model serving | ollama:11434 | cluster-internal |
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
-| Proteus | LangGraph agent and transparent Ollama proxy | proteus:8000 | :31400 |
+| Gateway | HTTP proxy, LangGraph agent, context management | gateway:8000 | :31400 |
+| Langfuse | LLM tracing, prompt versioning, evals | langfuse:3000 | :31300 |
+| PostgreSQL | Database backend for Langfuse | postgresql:5432 | cluster-internal |
+
+### Data flow
+
+```
+workstation                          k8s cluster (aiforge)
+-----------                          ---------------------
+goose + forgetools ---HTTP--->  gateway ----> ollama (GPU)
+   (tools run locally)            |   \-----> searxng
+                                  |   \-----> qdrant
+                                  |
+                                  +--traces--> langfuse --> postgresql
+```
 
 ## Quick Start
 
@@ -27,56 +41,61 @@ Prerequisites: Kubernetes cluster with GPU support, NVIDIA device plugin, kubect
 
 Verify with `./tests/test-stack.sh` and `./tests/test-services.sh`.
 
-## Frontends
+## Frontend
 
-| Frontend | Description |
-|----------|-------------|
-| `goose.sh` | Terminal coding agent with MCP tools (web search, qdrant, files, git, shell) |
-| `opencode.sh` | Terminal coding assistant with MCP tools and TUI (web search, qdrant, files, git, shell) |
+Goose is the sole frontend. It launches forgetools (6 curated MCP tools) via stdio on your workstation. Gateway sees every request and forwards traces to Langfuse.
 
-Routing contract: `client -> proteus -> ollama`. Clients should never target Ollama directly.
+| Process | Description |
+|---------|-------------|
+| `goose.sh` | Terminal coding agent with forgetools MCP server |
+| `forgetools.py` | MCP tool server with read_file, write_file, list_directory, search_files, run_command, web_search |
+
+Routing contract: `client -> gateway -> ollama`. Clients should never target Ollama directly.
 
 Local models sometimes misinterpret intent. Use explicit phrasing like "analyze this code, do not edit any files" to avoid unintended edits.
 
-## Proteus
+## Gateway
 
-FastAPI app in `images/proteus/` with two modes. The `/chat` and `/chat/stream` endpoints run a LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The orchestrator node calls the model, and the tools node dispatches tool calls and loops back until the model produces a final answer. The `/v1/chat/completions` and `/v1/embeddings` endpoints are transparent proxies to Ollama, preserving tool_calls in the response so clients like opencode and goose can execute tools client-side via MCP.
+FastAPI app in `images/gateway/` with two modes. The `/chat` and `/chat/stream` endpoints run a LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The `/v1/chat/completions` and `/v1/embeddings` endpoints are transparent proxies to Ollama, preserving tool_calls in the response so Goose can execute tools client-side via MCP.
+
+The proxy path includes context management that estimates token count and drops oldest tool-result messages when approaching the context window ceiling. This prevents Ollama from silently truncating conversations.
 
 Endpoint Surface (Native + OpenAI Compatibility):
 
-| Surface | Method | Endpoint | Purpose / Notes |
-|---------|--------|----------|-----------------|
-| Native | POST | `/chat` | Server-side agent with tool execution via LangGraph. |
-| Native | POST | `/chat/stream` | SSE streaming with node progress events. |
-| Native | GET | `/health` | Dependency health check for Ollama and SearXNG. |
-| Native | GET | `/health/live` | Kubernetes liveness probe. |
-| Native | GET | `/health/ready` | Kubernetes readiness probe. |
-| Native | GET | `/docs` | FastAPI OpenAPI docs UI. |
-| OpenAI-compatible | POST | `/v1/chat/completions` | Transparent proxy to Ollama preserving tool_calls. |
-| OpenAI-compatible | POST | `/v1/embeddings` | Embedding proxy to Ollama for MCP servers. |
-| OpenAI-compatible | GET | `/v1/models` | Model list for client discovery. |
-| OpenAI-compatible | GET | `/v1/models/{model_id}` | Single model retrieval for SDK validation. |
+| Surface | Method | Endpoint | Purpose |
+|---------|--------|----------|---------|
+| Native | POST | `/chat` | Server-side agent with tool execution via LangGraph |
+| Native | POST | `/chat/stream` | SSE streaming with node progress events |
+| Native | GET | `/health` | Dependency health check for Ollama and SearXNG |
+| Native | GET | `/health/live` | Kubernetes liveness probe |
+| Native | GET | `/health/ready` | Kubernetes readiness probe |
+| Native | GET | `/docs` | FastAPI OpenAPI docs UI |
+| OpenAI-compatible | POST | `/v1/chat/completions` | Transparent proxy to Ollama preserving tool_calls |
+| OpenAI-compatible | POST | `/v1/embeddings` | Embedding proxy to Ollama for MCP servers |
+| OpenAI-compatible | GET | `/v1/models` | Model list for client discovery |
+| OpenAI-compatible | GET | `/v1/models/{model_id}` | Single model retrieval for SDK validation |
 
-TODO: add thread-aware retrieval memory in the LangGraph loop. Ingestion is available via the `qdrant_index` MCP tool, but the server-side agent does not yet use conversation history for retrieval.
+## Observability
+
+Langfuse stores per-request traces with prompts, tool calls, tool results, latency, and token counts. Gateway sends traces on every proxy request. Query the Langfuse API to diagnose issues. Pod logs are available via `kubectl logs` for live debugging.
 
 ## Configuration
 
 Launcher scripts source `config.env`. Override any variable at launch. Test scripts source `tests/test.env` for test-specific defaults.
 
 Client config files generated by launcher scripts:
-- Goose: `~/.config/goose/config.yaml` and `~/.config/goose/custom_providers/proteus.json`
-- OpenCode: `~/.config/opencode/config.json`
+- Goose: `~/.config/goose/config.yaml` and `~/.config/goose/custom_providers/gateway.json`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | AGENT_BASE_MODEL | devstral:latest | Base model pulled from Ollama registry |
 | AGENT_MODEL | ${AGENT_BASE_MODEL}-agent | Tuned alias with baked-in verbosity controls |
-| AGENT_URL | http://bigfish:31400 | Proteus proxy URL |
+| AGENT_URL | http://bigfish:31400 | Gateway proxy URL |
 | SEARXNG_URL | http://bigfish:31080 | SearXNG search API URL |
 | QDRANT_URL | http://bigfish:31333 | Qdrant vector store URL |
 | EMBEDDING_MODEL | nomic-embed-text | Model used for embeddings |
 
-Model tuning parameters (temperature, top_p, max_tokens, repeat_penalty) live in the k8s ConfigMaps in `proteus.yaml` and are baked into the Ollama model alias at deploy time.
+Model tuning parameters (temperature, top_p, max_tokens, repeat_penalty) live in the k8s ConfigMaps in `gateway.yaml` and are baked into the Ollama model alias at deploy time.
 
 ## Context Window Sizing
 
@@ -89,21 +108,21 @@ KV cache reduces per-token cost at the expense of minor precision loss.
 | KV cache type | Cost per token | Max context in 2 GB | Recommended num_ctx | Tradeoff |
 |---------------|----------------|---------------------|---------------------|----------|
 | FP16 (default) | ~0.2 MiB | ~10,000 | 8192 | No quality loss, but tight for tool-heavy sessions with large system prompts |
-| Q8_0 | ~0.1 MiB | ~20,000 | 16384 | Negligible quality loss, comfortable for most Goose and opencode conversations |
-| Q4_0 | ~0.05 MiB | ~40,000 | 32768 | Some KV precision loss, generous context for long multi-turn sessions |
+| Q8_0 | ~0.1 MiB | ~20,000 | 16384 | Negligible quality loss, comfortable for most conversations |
+| Q4_0 (current) | ~0.05 MiB | ~40,000 | 32768 | Some KV precision loss, generous context for long multi-turn sessions |
 
 Set `OLLAMA_KV_CACHE_TYPE` in `k8s/ollama.yaml` and `AGENT_NUM_CTX` in
-both `k8s/ollama.yaml` and `k8s/proteus.yaml`. Proteus injects num_ctx
+both `k8s/ollama.yaml` and `k8s/gateway.yaml`. Gateway injects num_ctx
 into every Ollama request and reports the value on `GET /v1/models` so
 clients can display accurate token counts.
 
 ## Testing
 
-- `test-stack.sh` - SearXNG, Qdrant, and Proteus health checks
+- `test-stack.sh` - SearXNG, Qdrant, and Gateway health checks
 - `test-services.sh` - Qdrant CRUD and SearXNG search
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
 - `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/chat`
-- `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories (targets Ollama directly, not Proteus)
+- `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories (targets Ollama directly, not Gateway)
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
 - `tests/test_*.py` - unit tests (pytest)
 
@@ -137,12 +156,6 @@ Override target model or URL: `MODEL=qwen3:8b ./tests/test-stack.sh`
 | qwen2.5:14b | 15/20 | 9/12 | 6/8 | 17/20 | 14s |
 | qwen3:14b | 13/20 | 5/12 | 8/8 | 13/20 | 1m 39s |
 | llama3.1:8b | 10/20 | 10/12 | 0/8 | 18/20 | 54s |
-
-- **Judgment** = Search + NoSearch combined score
-- **Search** = correctly calls `web_search` on 12 current-info prompts
-- **NoSearch** = correctly answers directly on 8 well-known-fact prompts
-- **JSON OK** = valid tool call structure
-- **E2E** = full stack latency
 
 ```bash
 ./tests/bench-model-compare.sh

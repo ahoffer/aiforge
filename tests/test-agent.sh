@@ -145,15 +145,15 @@ try:
     d = json.load(sys.stdin)
     models = d.get('data', [])
     ids = [m.get('id') for m in models]
-    print('true' if 'proteus' in ids else 'false')
+    print('true' if 'gateway' in ids else 'false')
 except Exception:
     print('false')
 " 2>/dev/null || echo "false")
 
 if [ "$modelsOk" = "true" ]; then
-    report "Agent /v1/models lists proteus model" "true"
+    report "Agent /v1/models lists gateway model" "true"
 else
-    report "Agent /v1/models lists proteus model" "false"
+    report "Agent /v1/models lists gateway model" "false"
 fi
 echo ""
 
@@ -162,7 +162,7 @@ echo "--- Agent: OpenAI Chat Completions ---"
 completionsStart=$(date +%s%N)
 completionsJson=$(curl -s --max-time 120 "$AGENT_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"proteus","messages":[{"role":"user","content":"What is 2+2?"}]}' \
+    -d '{"model":"gateway","messages":[{"role":"user","content":"What is 2+2?"}]}' \
     2>/dev/null || echo "{}")
 completionsEnd=$(date +%s%N)
 completionsMs=$(( (completionsEnd - completionsStart) / 1000000 ))
@@ -189,7 +189,7 @@ echo "--- Agent: OpenAI Streaming ---"
 streamOaiStart=$(date +%s%N)
 streamOaiOutput=$(curl -s --max-time 120 "$AGENT_URL/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d '{"model":"proteus","messages":[{"role":"user","content":"Say hello"}],"stream":true}' \
+    -d '{"model":"gateway","messages":[{"role":"user","content":"Say hello"}],"stream":true}' \
     2>/dev/null || echo "")
 streamOaiEnd=$(date +%s%N)
 streamOaiMs=$(( (streamOaiEnd - streamOaiStart) / 1000000 ))

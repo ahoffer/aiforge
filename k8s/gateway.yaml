@@ -1,8 +1,8 @@
-# ---------- Proteus Smart Proxy ----------
+# ---------- Gateway ----------
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: proteus-config
+  name: gateway-config
   namespace: aiforge
 data:
   OLLAMA_URL: "http://ollama:11434"
@@ -10,13 +10,18 @@ data:
   QDRANT_URL: "http://qdrant:6333"
   AGENT_MODEL: "devstral:latest-agent"
   AGENT_MAX_TOKENS: "2048"
-  # Feb 2025: injected into every Ollama request to override the 4096 default.
-  AGENT_NUM_CTX: "16384"
+  # Injected into every Ollama request to override the 4096 default.
+  # Matches Q4_0 KV cache budget in ollama.yaml.
+  AGENT_NUM_CTX: "32768"
+  # Langfuse tracing
+  LANGFUSE_HOST: "http://langfuse:3000"
+  LANGFUSE_PUBLIC_KEY: "pk-lf-aiforge"
+  LANGFUSE_SECRET_KEY: "sk-lf-aiforge"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: proteus
+  name: gateway
   namespace: aiforge
 spec:
   replicas: 1
@@ -24,11 +29,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app: proteus
+      app: gateway
   template:
     metadata:
       labels:
-        app: proteus
+        app: gateway
     spec:
       # Feb 2026: containerd on bigfish fails with "open /sys/kernel/security/apparmor/profiles"
       # when AppArmor kernel module is not loaded. Disable the default profile.
@@ -36,14 +41,14 @@ spec:
         appArmorProfile:
           type: Unconfined
       containers:
-        - name: proteus
-          image: proteus:64c76e07fffe
+        - name: gateway
+          image: gateway:64c76e07fffe
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef:
-                name: proteus-config
+                name: gateway-config
           resources:
             requests:
               memory: 256Mi
@@ -66,11 +71,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: proteus
+  name: gateway
   namespace: aiforge
 spec:
   selector:
-    app: proteus
+    app: gateway
   ports:
     - name: http
       port: 8000

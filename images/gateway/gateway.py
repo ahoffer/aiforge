@@ -1,12 +1,12 @@
-# proteus.py
-"""FastAPI entry point for Proteus.
+# gateway.py
+"""FastAPI entry point for the gateway.
 
 Two modes of operation:
 - /chat and /chat/stream run the LangGraph agent with server-side tool
   execution, for Open WebUI and similar thick-server clients.
 - /v1/chat/completions is a transparent proxy to Ollama. It preserves
-  tool_calls in the response so clients like opencode and goose can
-  execute tools client-side via MCP.
+  tool_calls in the response so Goose can execute tools client-side
+  via MCP.
 - /v1/embeddings proxies to Ollama's embedding endpoint for MCP servers
   that cannot reach the cluster-internal Ollama service directly.
 """
@@ -24,6 +24,7 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
+from langfuse import Langfuse
 from pydantic import BaseModel
 import uvicorn
 
@@ -40,13 +41,21 @@ AGENT_NUM_CTX = int(os.getenv("AGENT_NUM_CTX", "0"))
 _SENTINEL = object()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
 PROXY_TIMEOUT = 300.0
+# Start trimming when estimated tokens exceed this fraction of the context window
+CONTEXT_TRIM_THRESHOLD = 0.75
+
+# Langfuse tracing. Disabled when LANGFUSE_HOST is not set.
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+_langfuse: Langfuse | None = None
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("proteus")
+log = logging.getLogger("gateway")
 
 LOG_LANGGRAPH_OUTPUT = os.getenv("LOG_LANGGRAPH_OUTPUT", "true").lower() in ("1", "true")
 
@@ -97,7 +106,7 @@ class OpenAIMessage(BaseModel):
 
 class OpenAIChatRequest(BaseModel):
     model_config = {"extra": "allow"}
-    model: str = "proteus"
+    model: str = "gateway"
     messages: list[OpenAIMessage] = []
     stream: bool = False
     tools: list[dict] | None = None
@@ -140,11 +149,24 @@ def _msg_to_dict(msg) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("Proteus starting up")
+    global _langfuse
+    log.info("Gateway starting up")
     app.state.http = httpx.AsyncClient(timeout=httpx.Timeout(PROXY_TIMEOUT, connect=10.0))
+    if LANGFUSE_HOST:
+        try:
+            _langfuse = Langfuse(
+                host=LANGFUSE_HOST,
+                public_key=LANGFUSE_PUBLIC_KEY,
+                secret_key=LANGFUSE_SECRET_KEY,
+            )
+            log.info("Langfuse tracing enabled at %s", LANGFUSE_HOST)
+        except Exception:
+            log.warning("Langfuse initialization failed, tracing disabled", exc_info=True)
     yield
+    if _langfuse:
+        _langfuse.flush()
     await app.state.http.aclose()
-    log.info("Proteus shutting down")
+    log.info("Gateway shutting down")
 
 
 # ----------------------------
@@ -244,10 +266,111 @@ def _build_ollama_options(request) -> dict:
     return opts
 
 
+def _trace_request(trace_id: str, model: str, messages: list[dict],
+                    tools_count: int, stream: bool):
+    """Start a Langfuse trace for a proxy request."""
+    if not _langfuse:
+        return None
+    try:
+        trace = _langfuse.trace(
+            id=trace_id,
+            name="proxy",
+            metadata={"model": model, "tools_count": tools_count, "stream": stream},
+            input={"messages_count": len(messages)},
+        )
+        return trace
+    except Exception:
+        log.debug("Langfuse trace creation failed", exc_info=True)
+        return None
+
+
+def _trace_response(trace, model: str, messages: list[dict],
+                    output: dict, latency_ms: float):
+    """Complete a Langfuse trace with the response."""
+    if not trace:
+        return
+    try:
+        trace.generation(
+            name="ollama",
+            model=model,
+            input=messages,
+            output=output,
+            metadata={"latency_ms": latency_ms},
+        )
+    except Exception:
+        log.debug("Langfuse trace completion failed", exc_info=True)
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Rough token estimate. Average English token is about 4 characters."""
+    total = 0
+    for msg in messages:
+        content = msg.get("content") or ""
+        total += len(content) // 4
+        for tc in msg.get("tool_calls", []):
+            fn = tc.get("function", {})
+            args = fn.get("arguments", "")
+            if isinstance(args, dict):
+                args = json.dumps(args)
+            total += len(str(args)) // 4
+    return total
+
+
+def _trim_context(messages: list[dict], max_tokens: int) -> list[dict]:
+    """Drop oldest tool-result messages to fit within the token budget.
+
+    Preserves the system prompt, the last 3 user/assistant turns, and the
+    current (final) user message. Drops tool-result messages from oldest
+    to newest until the estimate fits. Returns the trimmed message list.
+    """
+    if not max_tokens or _estimate_tokens(messages) <= max_tokens:
+        return messages
+
+    # Identify protected indices: system prompt and last 3 turn pairs
+    protected = set()
+    if messages and messages[0].get("role") == "system":
+        protected.add(0)
+    # Always protect the last message (current user request)
+    if messages:
+        protected.add(len(messages) - 1)
+    # Protect last 3 user/assistant pairs from the end
+    keep_count = 0
+    for i in range(len(messages) - 1, -1, -1):
+        role = messages[i].get("role", "")
+        if role in ("user", "assistant"):
+            protected.add(i)
+            keep_count += 1
+            if keep_count >= 6:
+                break
+        elif role == "tool" and i > 0:
+            # Tool results adjacent to protected assistant turns stay
+            prev_role = messages[i - 1].get("role", "")
+            if prev_role == "assistant" and (i - 1) in protected:
+                protected.add(i)
+
+    trimmed = list(messages)
+    dropped = 0
+    for i in range(len(messages)):
+        if i in protected:
+            continue
+        if _estimate_tokens(trimmed) <= max_tokens:
+            break
+        if trimmed[i].get("role") == "tool":
+            trimmed[i] = {"role": "tool", "content": "[trimmed]",
+                          "tool_call_id": trimmed[i].get("tool_call_id", ""),
+                          "name": trimmed[i].get("name", "")}
+            dropped += 1
+
+    if dropped:
+        log.info("context trimmed %d tool-result messages to fit %d token budget",
+                 dropped, max_tokens)
+    return trimmed
+
+
 app = FastAPI(
-    title="Proteus",
+    title="Gateway",
     description="LangGraph agent and transparent Ollama proxy",
-    version="5.0.0",
+    version="6.0.0",
     lifespan=lifespan,
 )
 
@@ -387,7 +510,7 @@ async def chat_stream(request: ChatRequest):
 
 @app.get("/v1/models")
 async def list_models():
-    model_info = {"id": "proteus", "object": "model", "created": 0, "owned_by": "local"}
+    model_info = {"id": "gateway", "object": "model", "created": 0, "owned_by": "local"}
     if AGENT_NUM_CTX:
         model_info["context_window"] = AGENT_NUM_CTX
     return {"object": "list", "data": [model_info]}
@@ -395,8 +518,8 @@ async def list_models():
 
 @app.get("/v1/models/{model_id}")
 async def retrieve_model(model_id: str):
-    if model_id == "proteus":
-        model_info = {"id": "proteus", "object": "model", "created": 0, "owned_by": "local"}
+    if model_id == "gateway":
+        model_info = {"id": "gateway", "object": "model", "created": 0, "owned_by": "local"}
         if AGENT_NUM_CTX:
             model_info["context_window"] = AGENT_NUM_CTX
         return model_info
@@ -424,10 +547,17 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
+    # Trim old tool results when approaching the context window ceiling
+    if AGENT_NUM_CTX:
+        trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
+        ollama_messages = _trim_context(ollama_messages, trim_budget)
+
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
-    model = AGENT_MODEL if request.model in ("proteus", None) else request.model
+    model = AGENT_MODEL if request.model in ("gateway", None) else request.model
+    tools_count = len(request.tools) if request.tools else 0
+    trace = _trace_request(completion_id, model, ollama_messages, tools_count, stream=False)
 
     ollama_payload = {
         "model": model,
@@ -442,6 +572,7 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
     if opts:
         ollama_payload["options"] = opts
 
+    t0 = time.time()
     try:
         resp = await http.post(f"{OLLAMA_URL}/api/chat", json=ollama_payload)
     except httpx.TimeoutException:
@@ -452,6 +583,7 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
         return JSONResponse(status_code=502, content={
             "error": {"message": "Cannot connect to Ollama", "type": "connection_error"},
         })
+    latency_ms = (time.time() - t0) * 1000
 
     if resp.status_code != 200:
         return JSONResponse(status_code=resp.status_code, content={
@@ -471,12 +603,13 @@ async def _openai_non_streaming(request: OpenAIChatRequest):
 
     _log_tool_call_outcome(
         openai_msg.get("tool_calls"), tools_offered=bool(request.tools), stream=False)
+    _trace_response(trace, model, ollama_messages, openai_msg, latency_ms)
 
     return {
         "id": completion_id,
         "object": "chat.completion",
         "created": created,
-        "model": request.model or "proteus",
+        "model": request.model or "gateway",
         "choices": [{"index": 0, "message": openai_msg, "finish_reason": finish}],
     }
 
@@ -487,10 +620,15 @@ async def _openai_streaming(request: OpenAIChatRequest):
     messages = [_msg_to_dict(m) for m in request.messages]
     ollama_messages = _openai_messages_to_ollama(messages)
 
+    # Trim old tool results when approaching the context window ceiling
+    if AGENT_NUM_CTX:
+        trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
+        ollama_messages = _trim_context(ollama_messages, trim_budget)
+
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
     http: httpx.AsyncClient = app.state.http
-    model = AGENT_MODEL if request.model in ("proteus", None) else request.model
+    model = AGENT_MODEL if request.model in ("gateway", None) else request.model
 
     ollama_payload = {
         "model": model,
@@ -505,7 +643,7 @@ async def _openai_streaming(request: OpenAIChatRequest):
     if opts:
         ollama_payload["options"] = opts
 
-    model_label = request.model or "proteus"
+    model_label = request.model or "gateway"
 
     async def generate():
         try:
@@ -594,7 +732,7 @@ class EmbeddingRequest(BaseModel):
 @app.post("/v1/embeddings")
 async def embeddings(request: EmbeddingRequest):
     http: httpx.AsyncClient = app.state.http
-    model = EMBEDDING_MODEL if request.model in ("proteus", None) else request.model
+    model = EMBEDDING_MODEL if request.model in ("gateway", None) else request.model
     text_input = request.input if isinstance(request.input, list) else [request.input]
 
     try:
@@ -630,7 +768,7 @@ async def embeddings(request: EmbeddingRequest):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Proteus")
+    parser = argparse.ArgumentParser(description="Gateway")
     parser.add_argument("--serve", action="store_true", help="Start the HTTP server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")

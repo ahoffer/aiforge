@@ -20,8 +20,9 @@ data:
   OLLAMA_KEEP_ALIVE: "-1"
   OLLAMA_NUM_PARALLEL: "2"
   OLLAMA_MAX_LOADED_MODELS: "1"
-  # Feb 2025: Q8_0 KV cache halves VRAM per token, fitting 16k context in ~2 GB.
-  OLLAMA_KV_CACHE_TYPE: "q8_0"
+  # Q4_0 KV cache quarters VRAM per token, fitting 32k context in ~2 GB.
+  # Minor precision loss compared to Q8_0, large context gain for tool-heavy sessions.
+  OLLAMA_KV_CACHE_TYPE: "q4_0"
   DEFAULT_MODEL: "devstral:latest"
   # LLM response tuning. Applied by creating a model alias at startup.
   AGENT_TEMPERATURE: "0.7"
@@ -30,8 +31,8 @@ data:
   AGENT_REPEAT_PENALTY: "1.2"
   # Feb 2025: Ollama defaults to 4096 context. Clients like Goose and opencode
   # send large tool-heavy prompts that get silently truncated. See ollama#5356.
-  AGENT_NUM_CTX: "16384"
-  AGENT_SYSTEM_PROMPT: "Be concise and direct. Avoid filler phrases. When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data. Search first, then answer."
+  AGENT_NUM_CTX: "32768"
+  AGENT_SYSTEM_PROMPT: "You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search only when local context is insufficient, for example to check library versions or API changes beyond your training data. Be concise and direct. Avoid filler phrases."
 ---
 apiVersion: apps/v1
 kind: Deployment

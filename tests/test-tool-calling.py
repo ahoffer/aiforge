@@ -9,7 +9,7 @@ printed in a table with per-test latency.
 Usage:
     python3 test-tool-calling.py [model_name] [--url URL] [--direct]
 
-Defaults to model "proteus" through Proteus proxy at AGENT_URL env var
+Defaults to model "gateway" through the gateway proxy at AGENT_URL env var
 (fallback http://bigfish:31400). Use --direct to bypass the proxy and hit
 Ollama at http://localhost:11434 with devstral:latest instead.
 """
@@ -449,9 +449,9 @@ MULTI_TURN_TESTS = [
         "prompt": "Read /etc/hostname and tell me what the hostname is",
         "tools": ALL_TOOLS,
         "fake_results": {
-            "read_file": "proteus-node-7a3b\n",
+            "read_file": "gateway-node-7a3b\n",
         },
-        "validate_final": validateFinalContains(["proteus-node-7a3b"]),
+        "validate_final": validateFinalContains(["gateway-node-7a3b"]),
     },
     {
         "name": "list then describe",
@@ -661,7 +661,7 @@ def main():
         "model",
         nargs="?",
         default=None,
-        help="Model name to test. Default: proteus (proxy) or devstral:latest (--direct)",
+        help="Model name to test. Default: gateway (proxy) or devstral:latest (--direct)",
     )
     parser.add_argument(
         "--url",
@@ -672,7 +672,7 @@ def main():
     parser.add_argument(
         "--direct",
         action="store_true",
-        help="Bypass Proteus and test against Ollama directly",
+        help="Bypass gateway and test against Ollama directly",
     )
     parser.add_argument(
         "--category",
@@ -689,7 +689,7 @@ def main():
             args.url = "http://localhost:11434"
     else:
         if args.model is None:
-            args.model = "proteus"
+            args.model = "gateway"
         if args.url is None:
             args.url = os.environ.get("AGENT_URL", "http://bigfish:31400")
 
@@ -697,7 +697,7 @@ def main():
     if args.category:
         testsToRun = [t for t in ALL_TESTS if t["category"] == args.category]
 
-    modeLabel = "direct (Ollama)" if args.direct else "proxy (Proteus)"
+    modeLabel = "direct (Ollama)" if args.direct else "proxy (Gateway)"
     print()
     print("=" * 60)
     print("  Tool Calling Test Suite")

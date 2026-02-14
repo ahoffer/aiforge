@@ -1,0 +1,76 @@
+# ---------- Langfuse (LLM observability) ----------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-config
+  namespace: aiforge
+data:
+  DATABASE_URL: "postgresql://langfuse:langfuse@postgresql:5432/langfuse"
+  NEXTAUTH_URL: "http://langfuse:3000"
+  NEXTAUTH_SECRET: "aiforge-langfuse-secret"
+  SALT: "aiforge-langfuse-salt"
+  # Disable telemetry in self-hosted deployment
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse
+  namespace: aiforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: langfuse
+  template:
+    metadata:
+      labels:
+        app: langfuse
+    spec:
+      securityContext:
+        appArmorProfile:
+          type: Unconfined
+      containers:
+        - name: langfuse
+          image: langfuse/langfuse:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: langfuse-config
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse
+  namespace: aiforge
+spec:
+  selector:
+    app: langfuse
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 31300
+  type: NodePort

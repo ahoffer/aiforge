@@ -1,6 +1,7 @@
 .goose/
 __pycache__/
 .opencode/
+=*
 .serena/
 /.idea/
 /.venv/
@@ -8,3 +9,6 @@ __pycache__/
 *.tar.gz
 uv.lock
 gpt-oss/
+.playwright-mcp/
+.playwright_profile/
+gemini_conversations/

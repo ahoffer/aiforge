@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Validates Qdrant and SearXNG services with functional tests
 # beyond simple health checks. Tests collection CRUD and SearXNG search.
-# Ollama is cluster-internal and tested indirectly through Proteus.
+# Ollama is cluster-internal and tested indirectly through Gateway.
 # Exit codes: 0 if all checks pass, 1 if any check fails.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

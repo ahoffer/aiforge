@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Proteus container image using nerdctl. Must run on bigfish.
+# Builds the gateway container image using nerdctl. Must run on bigfish.
 set -euo pipefail
 
 REQUIRED_HOST="bigfish"
@@ -14,11 +14,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Building proteus:latest image..." >&2
-sudo nerdctl build -t proteus:latest .
+echo "Building gateway:latest image..." >&2
+sudo nerdctl build -t gateway:latest .
 
-IMAGE_SHA=$(sudo nerdctl image inspect proteus:latest --format '{{.Id}}' | sed 's/sha256://')
+IMAGE_SHA=$(sudo nerdctl image inspect gateway:latest --format '{{.Id}}' | sed 's/sha256://')
 SHORT_SHA="${IMAGE_SHA:0:12}"
-sudo nerdctl tag proteus:latest "proteus:${SHORT_SHA}"
-echo "Tagged proteus:${SHORT_SHA}" >&2
+sudo nerdctl tag gateway:latest "gateway:${SHORT_SHA}"
+echo "Tagged gateway:${SHORT_SHA}" >&2
 echo "$SHORT_SHA"

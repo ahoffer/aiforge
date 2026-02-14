@@ -1,1 +1,1 @@
-When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data for libraries, frameworks, or technical specifications. Search first, then answer.
+Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web search only when local context is insufficient. Be concise and direct.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validates the AI agent stack by checking each service endpoint.
-# Ollama is cluster-internal and tested indirectly through Proteus.
+# Ollama is cluster-internal and tested indirectly through Gateway.
 # Exit codes: 0 if all checks pass, 1 if any check fails.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -37,7 +37,7 @@ AGENT_MAX_TOKENS="2048"
 AGENT_TOP_P="0.9"
 AGENT_REPEAT_PENALTY="1.2"
 
-AGENT_SYSTEM_PROMPT="Be concise and direct. Avoid filler phrases. When helping with code, ALWAYS search the web for latest documentation, API references, and code examples before answering. Do not rely on potentially outdated training data. Search first, then answer."
+AGENT_SYSTEM_PROMPT="You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search only when local context is insufficient, for example to check library versions or API changes beyond your training data. Be concise and direct. Avoid filler phrases."
 
 # System prompt from graph.py used for tool-calling tests
 TOOL_SYSTEM_PROMPT="You are a helpful research assistant with access to web search. Use the web_search tool when you need current information or facts you are not confident about. Cite your sources when you use search results. For simple questions you can answer confidently, respond directly without searching."
@@ -363,13 +363,13 @@ for model in "${MODELS[@]}"; do
     echo "  --- E2E: $model ---"
 
     echo "  Patching ConfigMap to ${aliasName}..."
-    kubectl patch configmap proteus-config -n aiforge \
+    kubectl patch configmap gateway-config -n aiforge \
         --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${aliasName}\"}}" \
         > /dev/null 2>&1
 
     echo "  Restarting agent deployment..."
-    kubectl rollout restart deployment/proteus -n aiforge > /dev/null 2>&1
-    kubectl rollout status deployment/proteus -n aiforge --timeout=120s 2>/dev/null || true
+    kubectl rollout restart deployment/gateway -n aiforge > /dev/null 2>&1
+    kubectl rollout status deployment/gateway -n aiforge --timeout=120s 2>/dev/null || true
 
     # Wait a few seconds for readiness probe
     sleep 5
@@ -408,12 +408,12 @@ done
 
 # Restore original model
 echo "  Restoring ConfigMap to ${ORIGINAL_MODEL}..."
-kubectl patch configmap proteus-config -n aiforge \
+kubectl patch configmap gateway-config -n aiforge \
     --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${ORIGINAL_MODEL}\"}}" \
     > /dev/null 2>&1
-kubectl rollout restart deployment/proteus -n aiforge > /dev/null 2>&1
-kubectl rollout status deployment/proteus -n aiforge --timeout=120s 2>/dev/null || true
-echo "  Proteus restored to ${ORIGINAL_MODEL}."
+kubectl rollout restart deployment/gateway -n aiforge > /dev/null 2>&1
+kubectl rollout status deployment/gateway -n aiforge --timeout=120s 2>/dev/null || true
+echo "  Gateway restored to ${ORIGINAL_MODEL}."
 echo ""
 
 # ---- Section 6: Comparison summary table ----
