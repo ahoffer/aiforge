@@ -1,0 +1,22 @@
+[
+  {"tag": "A1",  "prompt": "What were the main announcements at KubeCon North America 2025?", "expected": "search"},
+  {"tag": "A2",  "prompt": "Find the latest stable release version of Python.", "expected": "search"},
+  {"tag": "A3",  "prompt": "Search for CVEs disclosed in OpenSSL during 2025.", "expected": "search"},
+  {"tag": "A4",  "prompt": "Who won Super Bowl LX?", "expected": "search"},
+  {"tag": "A5",  "prompt": "Who won the Super Bowl in 2026?", "expected": "search"},
+  {"tag": "A6",  "prompt": "What companies have done the largest tech layoffs so far this year?", "expected": "search"},
+  {"tag": "A7",  "prompt": "Is Python 3.12 still the latest stable Python release?", "expected": "search"},
+  {"tag": "A8",  "prompt": "Does Kubernetes support native sidecar containers as a stable feature yet?", "expected": "search"},
+  {"tag": "A9",  "prompt": "Has the EU AI Act entered into force yet, and what are its main obligations?", "expected": "search"},
+  {"tag": "A10", "prompt": "What is the current Long-Term Support version of Node.js?", "expected": "search"},
+  {"tag": "A11", "prompt": "What were the breaking changes in Next.js 15?", "expected": "search"},
+  {"tag": "A12", "prompt": "What is the default garbage collector in the latest LTS release of Java?", "expected": "search"},
+  {"tag": "B1",  "prompt": "What is 7 times 13?", "expected": "nosearch"},
+  {"tag": "B2",  "prompt": "What is the capital of France?", "expected": "nosearch"},
+  {"tag": "B3",  "prompt": "In a Dockerfile, what is the difference between CMD and ENTRYPOINT?", "expected": "nosearch"},
+  {"tag": "B4",  "prompt": "What sorting algorithm does Python's built-in sort() use, and what is its average time complexity?", "expected": "nosearch"},
+  {"tag": "B5",  "prompt": "When was Kubernetes first released, who created it, and what Google system inspired its design?", "expected": "nosearch"},
+  {"tag": "B6",  "prompt": "Explain the CAP theorem. Can a distributed system guarantee all three properties simultaneously?", "expected": "nosearch"},
+  {"tag": "B7",  "prompt": "A Kubernetes node has 4 CPUs and 16GiB RAM. Each pod requests 500m CPU and 1GiB memory. What is the maximum number of pods the node can schedule based on resources alone?", "expected": "nosearch"},
+  {"tag": "B8",  "prompt": "Compare the Raft and Paxos consensus algorithms. Which is generally considered easier to understand and implement?", "expected": "nosearch"}
+]

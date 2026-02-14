@@ -4,15 +4,16 @@
 # and tool call latency across multiple configurations.
 #
 # Usage:
-#   ./bench-ollama.sh                        # defaults to devstral:latest
+#   ./bench-ollama.sh                        # defaults to deployed model
 #   MODEL=qwen3:8b ./bench-ollama.sh         # benchmark a different model
 #   ./bench-ollama.sh | tee bench-results.txt # save for comparison
 #   ./bench-ollama.sh | column -ts $'\t'      # pretty-print columns
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test.env"
+source "$SCRIPT_DIR/../config.env"
 
-MODEL="${MODEL:-devstral:latest}"
+MODEL="${MODEL:-$AGENT_MODEL}"
 TIMEOUT="${TIMEOUT:-120}"
 
 # ---- Header ----
@@ -51,20 +52,13 @@ print(json.dumps({
 
     python3 -c "
 import sys, json
+sys.path.insert(0, '$(dirname "$0")/lib')
+from parse_response import extract_generation_metrics
 label = '$label'
 try:
     d = json.loads(sys.stdin.read())
-    evalCount = d.get('eval_count', 0)
-    evalNs = d.get('eval_duration', 0)
-    promptCount = d.get('prompt_eval_count', 0)
-    promptNs = d.get('prompt_eval_duration', 0)
-    totalNs = d.get('total_duration', 0)
-
-    genTps = evalCount / (evalNs / 1e9) if evalNs > 0 else 0
-    promptTps = promptCount / (promptNs / 1e9) if promptNs > 0 else 0
-    totalMs = totalNs / 1e6
-
-    print(f'{label}\t{evalCount}\t{genTps:.1f}\t{promptCount}\t{promptTps:.1f}\t{totalMs:.0f}')
+    m = extract_generation_metrics(d)
+    print(f'{label}\t{m[\"gen_tokens\"]}\t{m[\"gen_tps\"]}\t{m[\"prompt_tokens\"]}\t{m[\"prompt_tps\"]}\t{m[\"total_ms\"]:.0f}')
 except Exception as e:
     print(f'{label}\t0\t0.0\t0\t0.0\t0\tERROR: {e}')
 " <<< "$responseJson"
@@ -210,7 +204,8 @@ except Exception:
 if [ "$warmupOk" = "ok" ]; then
     echo "Model loaded and ready."
 else
-    echo "WARNING: warm-up failed. Results may include model load time."
+    echo "FATAL: warm-up failed. Benchmarks against a cold model produce invalid results."
+    exit 1
 fi
 echo ""
 

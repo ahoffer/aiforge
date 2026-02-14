@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: warmup
+  namespace: aiforge
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: warmup
+          image: ollama/ollama:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ALIAS="${AGENT_MODEL}-agent"
+
+              # Wait for Ollama service to accept connections.
+              for i in $(seq 1 30); do
+                ollama list >/dev/null 2>&1 && break
+                echo "Waiting for Ollama (attempt $i/30)..."
+                sleep 10
+              done
+
+              /bin/sh /scripts/create-alias.sh
+
+              # Push model weights into GPU memory.
+              ollama run "$ALIAS" "hi" >/dev/null
+              echo "Model warm and ready."
+          envFrom:
+            - configMapRef:
+                name: ollama-config
+          env:
+            - name: OLLAMA_HOST
+              value: "ollama:11434"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: ollama-scripts
+            defaultMode: 0755

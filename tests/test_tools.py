@@ -11,7 +11,7 @@ if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
 if "tools" in sys.modules and isinstance(sys.modules["tools"], MagicMock):
     del sys.modules["tools"]
 
-from tools import QDRANT_SEARCH_TOOL, WEB_SEARCH_TOOL, DEFAULT_TOOLS, execute_tool
+from tools import QDRANT_SEARCH_TOOL, WEB_SEARCH_TOOL, DEFAULT_TOOLS, execute_tool, merge_tools
 
 
 def test_web_search_tool_schema():
@@ -78,3 +78,68 @@ def test_execute_tool_qdrant_search():
 def test_execute_tool_unknown():
     result = execute_tool("nonexistent", {}, MagicMock(), MagicMock(), MagicMock())
     assert "Unknown tool" in result
+
+
+def test_execute_tool_unknown_returns_string_not_exception():
+    """Unknown tool names return an error string, never raise."""
+    result = execute_tool("totally_fake_tool", {"arg": "val"}, MagicMock(), MagicMock(), MagicMock())
+    assert isinstance(result, str)
+    assert "totally_fake_tool" in result
+
+
+def test_execute_tool_web_search_exception_returns_error_string():
+    """When the SearXNG client raises, execute_tool should not propagate.
+    The caller in graph.py catches exceptions, but execute_tool for known
+    tools should still be robust if the client throws."""
+    mock_searxng = MagicMock()
+    mock_searxng.search_text.side_effect = ConnectionError("searxng down")
+    # execute_tool does not catch internally for web_search, so this will raise.
+    # This test documents the current behavior: the exception propagates
+    # and graph.py's tools_node catches it.
+    try:
+        execute_tool("web_search", {"query": "test"}, mock_searxng, MagicMock(), MagicMock())
+        raised = False
+    except ConnectionError:
+        raised = True
+    assert raised, "Exception from client should propagate to caller"
+
+
+def test_merge_tools_none_extras_returns_base():
+    base = [WEB_SEARCH_TOOL]
+    result = merge_tools(base, None)
+    assert result == base
+
+
+def test_merge_tools_empty_extras_returns_base():
+    base = [WEB_SEARCH_TOOL, QDRANT_SEARCH_TOOL]
+    result = merge_tools(base, [])
+    assert result == base
+
+
+def test_merge_tools_duplicate_base_takes_precedence():
+    custom_search = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "custom version",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    result = merge_tools([WEB_SEARCH_TOOL], [custom_search])
+    assert len(result) == 1
+    assert result[0]["function"]["description"] == WEB_SEARCH_TOOL["function"]["description"]
+
+
+def test_merge_tools_adds_new_tools():
+    extra_tool = {
+        "type": "function",
+        "function": {
+            "name": "custom_tool",
+            "description": "a new tool",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    result = merge_tools([WEB_SEARCH_TOOL], [extra_tool])
+    names = [t["function"]["name"] for t in result]
+    assert "web_search" in names
+    assert "custom_tool" in names

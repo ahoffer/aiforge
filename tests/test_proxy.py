@@ -32,6 +32,8 @@ from gateway import (
     _openai_messages_to_ollama,
     _ollama_tool_calls_to_openai,
     _build_ollama_options,
+    _estimate_tokens,
+    _trim_context,
     _SENTINEL,
     OpenAIMessage,
     OpenAIToolCall,
@@ -506,3 +508,93 @@ class TestChatStream:
         events = self._parse_sse_events(resp.text)
         assert len(events) == 1
         assert events[0] == ("done", "complete")
+
+
+class TestEstimateTokens:
+
+    def test_simple_message(self):
+        messages = [{"role": "user", "content": "abcd" * 10}]
+        assert _estimate_tokens(messages) == 10
+
+    def test_empty_messages(self):
+        assert _estimate_tokens([]) == 0
+
+    def test_includes_tool_call_arguments(self):
+        messages = [
+            {"role": "assistant", "tool_calls": [
+                {"function": {"arguments": '{"query": "abcd" }'}}
+            ]},
+        ]
+        estimate = _estimate_tokens(messages)
+        assert estimate > 0
+
+
+class TestTrimContext:
+
+    def _make_messages(self, tool_content_size=200, tool_count=5):
+        """Build a conversation with a system prompt, user/assistant pairs,
+        and tool result messages large enough to exceed a given budget."""
+        msgs = [{"role": "system", "content": "You are a helper."}]
+        for i in range(tool_count):
+            msgs.append({"role": "user", "content": f"question {i}"})
+            msgs.append({
+                "role": "assistant",
+                "tool_calls": [{"function": {"name": "web_search", "arguments": "{}"}}],
+            })
+            msgs.append({
+                "role": "tool",
+                "content": "x" * tool_content_size,
+                "tool_call_id": f"call_{i}",
+                "name": "web_search",
+            })
+        msgs.append({"role": "user", "content": "final question"})
+        return msgs
+
+    def test_under_budget_passes_through(self):
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+        ]
+        result = _trim_context(msgs, 10000)
+        assert result == msgs
+
+    def test_over_budget_trims_oldest_tool_messages(self):
+        msgs = self._make_messages(tool_content_size=400, tool_count=5)
+        total_before = _estimate_tokens(msgs)
+        budget = total_before // 2
+        result = _trim_context(msgs, budget)
+        trimmed_content = [m for m in result if m.get("content") == "[trimmed]"]
+        assert len(trimmed_content) > 0
+        assert _estimate_tokens(result) < total_before
+
+    def test_system_prompt_never_trimmed(self):
+        msgs = self._make_messages(tool_content_size=400, tool_count=5)
+        budget = 50
+        result = _trim_context(msgs, budget)
+        assert result[0]["role"] == "system"
+        assert result[0]["content"] == "You are a helper."
+
+    def test_last_three_user_assistant_pairs_protected(self):
+        msgs = self._make_messages(tool_content_size=400, tool_count=6)
+        budget = 50
+        result = _trim_context(msgs, budget)
+        # Last message is a user message, should be preserved
+        assert result[-1]["role"] == "user"
+        assert result[-1]["content"] == "final question"
+
+    def test_empty_messages_returns_empty(self):
+        assert _trim_context([], 100) == []
+
+    def test_single_oversized_message_returns_it(self):
+        msgs = [{"role": "user", "content": "x" * 10000}]
+        result = _trim_context(msgs, 10)
+        assert len(result) == 1
+        assert result[0]["content"] == "x" * 10000
+
+    def test_zero_budget_does_not_crash(self):
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+        ]
+        result = _trim_context(msgs, 0)
+        assert result is not None

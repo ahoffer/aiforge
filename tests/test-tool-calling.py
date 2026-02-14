@@ -11,15 +11,34 @@ Usage:
 
 Defaults to model "gateway" through the gateway proxy at AGENT_URL env var
 (fallback http://bigfish:31400). Use --direct to bypass the proxy and hit
-Ollama at http://localhost:11434 with devstral:latest instead.
+Ollama at http://localhost:11434 with the AGENT_MODEL env var instead.
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
 import time
 import requests
+
+# Import the production web_search schema so changes propagate automatically.
+# Falls back to a local definition if the gateway package is not on sys.path.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+try:
+    sys.path.insert(0, os.path.join(_SCRIPT_DIR, "..", "images", "gateway"))
+    from tools import WEB_SEARCH_TOOL as _PRODUCTION_WEB_SEARCH
+    sys.path.pop(0)
+except ImportError:
+    _PRODUCTION_WEB_SEARCH = None
+
+# Shared response parser for extract_tool_calls
+try:
+    sys.path.insert(0, os.path.join(_SCRIPT_DIR, "lib"))
+    from parse_response import extract_tool_calls as _shared_extract_tool_calls
+    sys.path.pop(0)
+except ImportError:
+    _shared_extract_tool_calls = None
 
 
 # -- Tool schemas shared across tests --
@@ -78,23 +97,27 @@ RUN_COMMAND_TOOL = {
     }
 }
 
-WEB_SEARCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "Search the web for a query and return results",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query string"
-                }
+# Use production schema when available, fall back for standalone runs
+if _PRODUCTION_WEB_SEARCH is not None:
+    WEB_SEARCH_TOOL = _PRODUCTION_WEB_SEARCH
+else:
+    WEB_SEARCH_TOOL = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current information on any topic",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query",
+                    }
+                },
+                "required": ["query"],
             },
-            "required": ["query"]
-        }
+        },
     }
-}
 
 WRITE_FILE_TOOL = {
     "type": "function",
@@ -617,6 +640,23 @@ def printResults(results):
         ))
 
 
+def writeJsonl(results, outputPath):
+    """Append results as JSON-lines for CI trending and post-mortem analysis."""
+    timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with open(outputPath, "a") as f:
+        for r in results:
+            record = {
+                "test": r["name"],
+                "category": r["category"],
+                "passed": r["passed"],
+                "reason": r["reason"],
+                "latency_ms": round(r["latencyMs"], 1),
+                "timestamp": timestamp,
+            }
+            f.write(json.dumps(record) + "\n")
+    print(f"  Results written to {outputPath}")
+
+
 def printSummary(results):
     """Print pass/fail counts by category and overall."""
     print()
@@ -661,7 +701,7 @@ def main():
         "model",
         nargs="?",
         default=None,
-        help="Model name to test. Default: gateway (proxy) or devstral:latest (--direct)",
+        help="Model name to test. Default: gateway (proxy) or AGENT_MODEL env (--direct)",
     )
     parser.add_argument(
         "--url",
@@ -679,12 +719,24 @@ def main():
         choices=["single_tool", "no_tool", "multi_tool", "multi_turn", "tool_count_stress"],
         help="Run only tests in this category",
     )
+    parser.add_argument(
+        "--jsonl",
+        default=os.environ.get("TEST_JSONL_PATH", "/tmp/test-tool-calling-results.jsonl"),
+        help="Path for JSON-lines output file (default: /tmp/test-tool-calling-results.jsonl)",
+    )
     args = parser.parse_args()
 
     # Resolve defaults based on --direct flag
     if args.direct:
         if args.model is None:
-            args.model = "devstral:latest"
+            args.model = os.environ.get("AGENT_MODEL")
+            if not args.model:
+                print(
+                    "FATAL: AGENT_MODEL is not set. "
+                    "Source config.env before running tests.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         if args.url is None:
             args.url = "http://localhost:11434"
     else:
@@ -731,6 +783,7 @@ def main():
         results.append(testResult)
 
     printResults(results)
+    writeJsonl(results, args.jsonl)
     printSummary(results)
 
     failedCount = sum(1 for r in results if not r["passed"])

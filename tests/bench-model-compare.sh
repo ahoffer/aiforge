@@ -13,6 +13,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test.env"
+source "$SCRIPT_DIR/../config.env"
 
 # ---- Section 1: Preamble ----
 
@@ -22,7 +23,7 @@ DEFAULT_MODELS=(
     "qwen2.5:14b"
     "mistral-nemo:latest"
     "llama3.1:8b"
-    "devstral:latest"
+    "qwen2.5-coder:14b"
 )
 
 if [ $# -gt 0 ]; then
@@ -42,56 +43,31 @@ AGENT_SYSTEM_PROMPT="You are a coding assistant. Read relevant files before maki
 # System prompt from graph.py used for tool-calling tests
 TOOL_SYSTEM_PROMPT="You are a helpful research assistant with access to web search. Use the web_search tool when you need current information or facts you are not confident about. Cite your sources when you use search results. For simple questions you can answer confidently, respond directly without searching."
 
-# Prompt arrays. TAGS, PROMPTS, and EXPECTED are parallel arrays.
-# Search prompts (A1-A12) test whether the model recognizes when its training
-# data might be stale, without relying on obvious recency keywords. NoSearch
-# prompts (B1-B8) sound like they need research but are well-established
-# knowledge that any LLM can answer from training data.
-TAGS=(
-    "A1" "A2" "A3" "A4" "A5" "A6" "A7" "A8" "A9" "A10" "A11" "A12"
-    "B1" "B2" "B3" "B4" "B5" "B6" "B7" "B8"
-)
+# Prompt definitions live in bench-prompts.json. A one-line JSON append
+# adds a test case instead of editing three parallel arrays.
+PROMPTS_FILE="$SCRIPT_DIR/bench-prompts.json"
+if [ ! -f "$PROMPTS_FILE" ]; then
+    echo "FATAL: $PROMPTS_FILE not found" >&2
+    exit 1
+fi
 
-PROMPTS=(
-    # Search: easy baseline, explicit recency (3)
-    "What were the main announcements at KubeCon North America 2025?"
-    "Find the latest stable release version of Python."
-    "Search for CVEs disclosed in OpenSSL during 2025."
-    # Search: recent events beyond training data (3)
-    "Who won Super Bowl LX?"
-    "Who won the Super Bowl in 2026?"
-    "What companies have done the largest tech layoffs so far this year?"
-    # Search: moderate, implicit recency with no keyword hint (3)
-    "Is Python 3.12 still the latest stable Python release?"
-    "Does Kubernetes support native sidecar containers as a stable feature yet?"
-    "Has the EU AI Act entered into force yet, and what are its main obligations?"
-    # Search: hard, agentic engineering scenarios (3)
-    "What is the current Long-Term Support version of Node.js?"
-    "What were the breaking changes in Next.js 15?"
-    "What is the default garbage collector in the latest LTS release of Java?"
-    # NoSearch: easy baseline (2)
-    "What is 7 times 13?"
-    "What is the capital of France?"
-    # NoSearch: moderate, specific tech but stable knowledge (3)
-    "In a Dockerfile, what is the difference between CMD and ENTRYPOINT?"
-    "What sorting algorithm does Python's built-in sort() use, and what is its average time complexity?"
-    "When was Kubernetes first released, who created it, and what Google system inspired its design?"
-    # NoSearch: hard, tempting to search (3)
-    "Explain the CAP theorem. Can a distributed system guarantee all three properties simultaneously?"
-    "A Kubernetes node has 4 CPUs and 16GiB RAM. Each pod requests 500m CPU and 1GiB memory. What is the maximum number of pods the node can schedule based on resources alone?"
-    "Compare the Raft and Paxos consensus algorithms. Which is generally considered easier to understand and implement?"
-)
+# Read JSON into tab-separated lines: tag\tprompt\texpected
+PROMPT_LINES=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    prompts = json.load(f)
+for p in prompts:
+    print(f\"{p['tag']}\t{p['prompt']}\t{p['expected']}\")
+" "$PROMPTS_FILE")
 
-EXPECTED=(
-    "search" "search" "search" "search" "search" "search" "search" "search" "search" "search" "search" "search"
-    "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch" "nosearch"
-)
+PROMPT_COUNT=$(echo "$PROMPT_LINES" | wc -l)
 
 BENCH_SUFFIX="-agent-bench"
+BENCH_JSONL="${BENCH_JSONL:-/tmp/bench-model-compare-results.jsonl}"
 
 print_header "Model Comparison Benchmark"
 echo "Models:          ${MODELS[*]}"
-echo "Prompts:         ${#PROMPTS[@]}"
+echo "Prompts:         $PROMPT_COUNT"
 echo ""
 
 # ---- Section 2: setup_model function ----
@@ -302,10 +278,7 @@ for model in "${MODELS[@]}"; do
     printf "  %-4s %-7s %-9s %7s  %s\n" "Tag" "JSON" "Judgment" "Latency" "Snippet"
     printf "  %-4s %-7s %-9s %7s  %s\n" "----" "-------" "---------" "-------" "-------"
 
-    for i in "${!TAGS[@]}"; do
-        tag="${TAGS[$i]}"
-        prompt="${PROMPTS[$i]}"
-        expected="${EXPECTED[$i]}"
+    while IFS=$'\t' read -r tag prompt expected; do
 
         metrics=$(run_prompt "$model" "$tag" "$prompt" "$expected") || true
         IFS='|' read -r latency jsonValid judgmentCorrect snippet <<< "$metrics"
@@ -338,7 +311,27 @@ for model in "${MODELS[@]}"; do
 
         # Format latency with ms suffix
         printf "  %-4s %-7s %-9s %6dms  %s\n" "$tag" "$jsonValid" "$judgmentCorrect" "$latency" "$snippet"
-    done
+
+        # Append JSONL record for CI trending
+        BENCH_TAG="$tag" BENCH_JV="$jsonValid" BENCH_JC="$judgmentCorrect" \
+        BENCH_LAT="$latency" BENCH_SNIP="$snippet" BENCH_MOD="$model" \
+        BENCH_PROMPT_TEXT="$prompt" BENCH_EXP="$expected" \
+        python3 -c "
+import json, os, sys, datetime
+record = {
+    'model': os.environ['BENCH_MOD'],
+    'tag': os.environ['BENCH_TAG'],
+    'prompt': os.environ['BENCH_PROMPT_TEXT'],
+    'expected': os.environ['BENCH_EXP'],
+    'json_valid': os.environ['BENCH_JV'] == 'true',
+    'judgment_correct': os.environ['BENCH_JC'] == 'true',
+    'latency_ms': int(os.environ['BENCH_LAT']),
+    'snippet': os.environ['BENCH_SNIP'],
+    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+}
+print(json.dumps(record))
+" >> "$BENCH_JSONL" 2>/dev/null || true
+    done <<< "$PROMPT_LINES"
 
     echo ""
 done
@@ -354,7 +347,19 @@ echo "  This patches the agent ConfigMap and restarts the pod."
 echo ""
 
 E2E_PROMPT="What is the latest stable release of Go?"
-ORIGINAL_MODEL="devstral:latest-agent"
+ORIGINAL_MODEL="${AGENT_MODEL}"
+
+restore_config() {
+    echo ""
+    echo "  Restoring ConfigMap to ${ORIGINAL_MODEL}..."
+    kubectl patch configmap gateway-config -n aiforge \
+        --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${ORIGINAL_MODEL}\"}}" \
+        > /dev/null 2>&1 || true
+    kubectl rollout restart deployment/gateway -n aiforge > /dev/null 2>&1 || true
+    kubectl rollout status deployment/gateway -n aiforge --timeout=120s 2>/dev/null || true
+    echo "  Gateway restored to ${ORIGINAL_MODEL}."
+}
+trap restore_config EXIT
 
 declare -A e2eLatency e2eSearchCount e2eStatus
 
@@ -406,14 +411,7 @@ except Exception as e:
     echo ""
 done
 
-# Restore original model
-echo "  Restoring ConfigMap to ${ORIGINAL_MODEL}..."
-kubectl patch configmap gateway-config -n aiforge \
-    --type merge -p "{\"data\":{\"AGENT_MODEL\":\"${ORIGINAL_MODEL}\"}}" \
-    > /dev/null 2>&1
-kubectl rollout restart deployment/gateway -n aiforge > /dev/null 2>&1
-kubectl rollout status deployment/gateway -n aiforge --timeout=120s 2>/dev/null || true
-echo "  Gateway restored to ${ORIGINAL_MODEL}."
+# Restoration handled by the EXIT trap set before the loop.
 echo ""
 
 # ---- Section 6: Comparison summary table ----
@@ -478,4 +476,6 @@ echo "  Judgment: model called web_search when expected and refrained when not"
 echo "  JSON OK: tool_calls had valid function.name and arguments.query"
 echo "  Search: correct calls out of 12 search-expected prompts"
 echo "  NoSearch: correct restraint out of 8 nosearch-expected prompts"
+echo ""
+echo "  Per-prompt JSONL results: $BENCH_JSONL"
 echo ""

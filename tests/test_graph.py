@@ -292,6 +292,43 @@ def test_tools_node_truncates_oversized_output(mock_searxng_cls, mock_exec):
     assert len(tool_msg["content"]) == expected_len
 
 
+@patch.object(graph, "OllamaClient")
+def test_orchestrator_max_iterations_strips_tool_calls_and_terminates(mock_ollama_cls):
+    """At max iterations the orchestrator must strip tool_calls, set
+    final_response, and the router must send the graph to END."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = {
+        "role": "assistant",
+        "content": "partial answer",
+        "tool_calls": [
+            {"function": {"name": "web_search", "arguments": "{}"}},
+            {"function": {"name": "qdrant_search", "arguments": "{}"}},
+        ],
+    }
+    mock_ollama_cls.return_value = mock_client
+
+    state = {
+        "message": "test",
+        "messages": [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "test"},
+        ],
+        "tool_iterations": graph.MAX_TOOL_ITERATIONS,
+    }
+    result = orchestrator_node(state)
+
+    # tool_calls must be absent from the final assistant message
+    last_msg = result["messages"][-1]
+    assert "tool_calls" not in last_msg
+
+    # final_response must be set
+    assert result["final_response"] == "partial answer"
+
+    # Router should send to END because final_response is set
+    combined = {**state, **result}
+    assert route_after_orchestrator(combined) == "__end__"
+
+
 @patch.object(graph, "execute_tool", return_value="short result")
 @patch.object(graph, "SearxngClient")
 def test_tools_node_passes_normal_output_unchanged(mock_searxng_cls, mock_exec):

@@ -17,22 +17,49 @@ metadata:
   namespace: aiforge
 data:
   OLLAMA_HOST: "0.0.0.0:11434"
+  OLLAMA_FLASH_ATTENTION: "1"
+  OLLAMA_GPU_OVERHEAD: "33554432"
   OLLAMA_KEEP_ALIVE: "-1"
   OLLAMA_NUM_PARALLEL: "2"
   OLLAMA_MAX_LOADED_MODELS: "1"
-  # Q4_0 KV cache quarters VRAM per token, fitting 32k context in ~2 GB.
-  # Minor precision loss compared to Q8_0, large context gain for tool-heavy sessions.
+  # Q4_0 KV cache quarters VRAM per token, fitting 16k context in ~1 GB.
+  # Leaves headroom for the 14B model weights on a 16GB GPU.
   OLLAMA_KV_CACHE_TYPE: "q4_0"
-  DEFAULT_MODEL: "devstral:latest"
+  AGENT_MODEL: "qwen2.5-coder:14b"
+  EMBEDDING_MODEL: "nomic-embed-text"
   # LLM response tuning. Applied by creating a model alias at startup.
-  AGENT_TEMPERATURE: "0.7"
+  AGENT_TEMPERATURE: "0.3"
   AGENT_MAX_TOKENS: "2048"
-  AGENT_TOP_P: "0.9"
-  AGENT_REPEAT_PENALTY: "1.2"
-  # Feb 2025: Ollama defaults to 4096 context. Clients like Goose and opencode
-  # send large tool-heavy prompts that get silently truncated. See ollama#5356.
-  AGENT_NUM_CTX: "32768"
+  AGENT_REPEAT_PENALTY: "1.05"
+  # Ollama defaults to 4096 context. Clients like Goose send large tool-heavy
+  # prompts that get silently truncated. 16k balances capacity with VRAM budget.
+  AGENT_NUM_CTX: "16384"
   AGENT_SYSTEM_PROMPT: "You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search only when local context is insufficient, for example to check library versions or API changes beyond your training data. Be concise and direct. Avoid filler phrases."
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-scripts
+  namespace: aiforge
+data:
+  create-alias.sh: |
+    #!/bin/sh
+    # Generates a Modelfile from ConfigMap env vars and creates the
+    # tuned agent alias. Shared by the postStart hook and warmup Job
+    # so changes to alias creation happen in one place.
+    set -eu
+    ALIAS="${AGENT_MODEL}-agent"
+    {
+      echo "FROM ${AGENT_MODEL}"
+      echo "PARAMETER temperature ${AGENT_TEMPERATURE}"
+      echo "PARAMETER num_predict ${AGENT_MAX_TOKENS}"
+      echo "PARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}"
+      echo "PARAMETER num_ctx ${AGENT_NUM_CTX}"
+      printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
+    } > /tmp/Modelfile
+    if ! ollama show "$ALIAS" >/dev/null 2>&1; then
+      ollama create "$ALIAS" -f /tmp/Modelfile
+    fi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -61,15 +88,20 @@ spec:
               sleep 5
               until ollama list >/dev/null 2>&1; do sleep 2; done
               # Pull base model for agent tool calling
-              timeout 600 ollama pull "$DEFAULT_MODEL" || echo "Model pull failed or timed out"
+              timeout 600 ollama pull "$AGENT_MODEL" || echo "Model pull failed or timed out"
               # Pull embedding model for RAG
-              timeout 120 ollama pull nomic-embed-text || echo "Embedding model pull failed or timed out"
+              timeout 120 ollama pull "$EMBEDDING_MODEL" || echo "Embedding model pull failed or timed out"
           env:
-            - name: DEFAULT_MODEL
+            - name: AGENT_MODEL
               valueFrom:
                 configMapKeyRef:
                   name: ollama-config
-                  key: DEFAULT_MODEL
+                  key: AGENT_MODEL
+            - name: EMBEDDING_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: ollama-config
+                  key: EMBEDDING_MODEL
           resources:
             requests:
               memory: 1Gi
@@ -112,20 +144,7 @@ spec:
                       exit 0
                     fi
 
-                    # Create tuned model alias with verbosity controls from ConfigMap.
-                    {
-                      echo "FROM ${DEFAULT_MODEL}"
-                      echo "PARAMETER temperature ${AGENT_TEMPERATURE}"
-                      echo "PARAMETER num_predict ${AGENT_MAX_TOKENS}"
-                      echo "PARAMETER top_p ${AGENT_TOP_P}"
-                      echo "PARAMETER repeat_penalty ${AGENT_REPEAT_PENALTY}"
-                      echo "PARAMETER num_ctx ${AGENT_NUM_CTX}"
-                      printf "SYSTEM %s\n" "${AGENT_SYSTEM_PROMPT}"
-                    } > /tmp/Modelfile
-
-                    if ! ollama show "${DEFAULT_MODEL}-agent" >/dev/null 2>&1; then
-                      ollama create "${DEFAULT_MODEL}-agent" -f /tmp/Modelfile || true
-                    fi
+                    /bin/sh /scripts/create-alias.sh || true
           resources:
             requests:
               memory: 2Gi
@@ -136,6 +155,8 @@ spec:
           volumeMounts:
             - name: ollama-data
               mountPath: /root/.ollama
+            - name: scripts
+              mountPath: /scripts
           readinessProbe:
             httpGet:
               path: /
@@ -154,6 +175,10 @@ spec:
         - name: ollama-data
           persistentVolumeClaim:
             claimName: ollama-data
+        - name: scripts
+          configMap:
+            name: ollama-scripts
+            defaultMode: 0755
 ---
 apiVersion: v1
 kind: Service
