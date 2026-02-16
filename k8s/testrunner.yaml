@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: testrunner
-          image: testrunner:f343feece882
+          image: testrunner:86bf0c65b325
           command: ["sleep", "infinity"]
           envFrom:
             - configMapRef:
