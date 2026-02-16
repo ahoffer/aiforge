@@ -25,12 +25,15 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from langfuse import Langfuse
+from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from pydantic import BaseModel
 import uvicorn
 
-from config import OLLAMA_URL, AGENT_MODEL, AGENT_NUM_CTX, EMBEDDING_MODEL, LOG_LANGGRAPH_OUTPUT
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+from config import OLLAMA_URL, AGENT_MODEL, AGENT_NUM_CTX, EMBEDDING_MODEL, LOG_LANGGRAPH_OUTPUT, MODEL_ADAPTER
 from contentfilters import select_filter
-from graph import agent_graph
+from graph import agent_graph, _extract_urls, RECURSION_LIMIT, close_checkpointer
 from clients import OllamaClient, SearxngClient
 
 # Sentinel for the sync-to-async queue bridge in chat_stream
@@ -40,10 +43,32 @@ PROXY_TIMEOUT = 300.0
 CONTEXT_TRIM_THRESHOLD = 0.75
 
 # Langfuse tracing. Disabled when LANGFUSE_HOST is not set.
+# Agent path uses the LangChain CallbackHandler for automatic tracing.
+# Proxy path uses manual Langfuse traces since it bypasses LangChain.
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
 _langfuse: Langfuse | None = None
+
+
+def _agent_graph_config(conversation_id: str) -> dict:
+    """Build graph invoke/stream config with checkpointer and Langfuse callbacks."""
+    config = {
+        "configurable": {"thread_id": conversation_id},
+        "recursion_limit": RECURSION_LIMIT,
+    }
+    if _langfuse:
+        try:
+            handler = LangfuseCallbackHandler(
+                host=LANGFUSE_HOST,
+                public_key=LANGFUSE_PUBLIC_KEY,
+                secret_key=LANGFUSE_SECRET_KEY,
+                session_id=conversation_id,
+            )
+            config["callbacks"] = [handler]
+        except Exception:
+            log.debug("Failed to create Langfuse callback handler", exc_info=True)
+    return config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -158,6 +183,7 @@ async def lifespan(app: FastAPI):
     yield
     if _langfuse:
         _langfuse.flush()
+    close_checkpointer()
     await app.state.http.aclose()
     log.info("Gateway shutting down")
 
@@ -272,25 +298,6 @@ def _valid_tool_names(tools: list[dict] | None) -> set[str]:
     return names
 
 
-def _filter_hallucinated_tools(tool_calls: list[dict], valid_names: set[str],
-                                model: str) -> list[dict]:
-    """Reject tool_calls with names the client never offered.
-
-    Catches the common failure mode where a model's pretraining priors
-    overwhelm the injected schemas and it invents plausible-looking names.
-    """
-    if not valid_names or not tool_calls:
-        return tool_calls
-    kept = []
-    for tc in tool_calls:
-        fn = tc.get("function", {})
-        name = fn.get("name", "")
-        if name in valid_names:
-            kept.append(tc)
-        else:
-            log.warning("proxy filtered hallucinated tool_call name=%r model=%s", name, model)
-    return kept
-
 
 def _trace_request(trace_id: str, model: str, messages: list[dict],
                     tools_count: int, stream: bool):
@@ -393,34 +400,6 @@ def _trim_context(messages: list[dict], max_tokens: int) -> list[dict]:
     return trimmed
 
 
-# Per-request tool selection guidance. Prepends a system message that steers
-# smaller models toward the right tool by listing concrete usage examples.
-# Only injected when the client sends tools, so pure chat stays untouched.
-_TOOL_GUIDANCE_TEMPLATE = (
-    "You have these tools: {tool_names}. "
-    "For grep, find, sed, awk, or any shell command, use run_command. "
-    "list_files only lists directory contents like ls. "
-    "Use web_search for current events, real-time information, or whenever the user explicitly asks to search the web. "
-    "Do not use web_search for well-known facts or concepts unless the user requests a search. "
-    "When the user asks for multiple actions, call all relevant tools in one response."
-)
-
-
-def _inject_tool_guidance(ollama_messages: list[dict], tools: list[dict] | None) -> list[dict]:
-    """Prepend a system message with tool selection guidance when tools are present."""
-    if not tools:
-        return ollama_messages
-    tool_names = [
-        (t.get("function") or {}).get("name", "")
-        for t in tools if t.get("type") == "function"
-    ]
-    tool_names = [n for n in tool_names if n]
-    if not tool_names:
-        return ollama_messages
-    guidance = {"role": "system", "content": _TOOL_GUIDANCE_TEMPLATE.format(
-        tool_names=", ".join(tool_names))}
-    return [guidance] + ollama_messages
-
 
 app = FastAPI(
     title="Gateway",
@@ -473,26 +452,40 @@ async def chat(request: ChatRequest):
     conversation_id = request.conversation_id or str(uuid4())
 
     try:
-        result = await asyncio.to_thread(
-            agent_graph.invoke,
-            {"message": request.message, "conversation_id": conversation_id},
-            {"configurable": {"thread_id": conversation_id}},
-        )
+        graph_input = {"messages": [HumanMessage(content=request.message)]}
+        config = _agent_graph_config(conversation_id)
+
+        result = await asyncio.to_thread(agent_graph.invoke, graph_input, config)
+
+        # Walk result messages to extract the final AI response and
+        # accumulate sources and search count from tool messages.
+        messages = result.get("messages", [])
+        final_response = ""
+        sources = []
+        search_count = 0
+
+        for msg in messages:
+            if isinstance(msg, AIMessage) and msg.content:
+                final_response = msg.content
+            elif isinstance(msg, ToolMessage):
+                content = msg.content or ""
+                if msg.name == "web_search":
+                    search_count += 1
+                    for url in _extract_urls(content):
+                        if url not in sources:
+                            sources.append(url)
 
         if LOG_LANGGRAPH_OUTPUT:
-            preview = (result.get("final_response", "") or "")[:200].replace("\n", " ")
+            preview = final_response[:200].replace("\n", " ")
             log.info(
-                "LangGraph /chat result conversation_id=%s keys=%s search_count=%s final_preview=%r",
-                conversation_id,
-                sorted(result.keys()),
-                result.get("search_count", 0),
-                preview,
+                "LangGraph /chat conversation_id=%s messages=%d search_count=%d preview=%r",
+                conversation_id, len(messages), search_count, preview,
             )
 
         return ChatResponse(
-            response=result.get("final_response", "") or "",
-            sources=result.get("sources", []) or [],
-            search_count=int(result.get("search_count", 0) or 0),
+            response=final_response,
+            sources=sources,
+            search_count=search_count,
             conversation_id=conversation_id,
         )
     except Exception as e:
@@ -501,21 +494,34 @@ async def chat(request: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
+    """Stream agent responses as SSE events using LangGraph stream_mode="messages".
+
+    Event format:
+      event: token   -- incremental content from the agent (AIMessage chunks)
+      event: done    -- graph execution finished
+
+    Only AIMessage chunks from the agent node are streamed. ToolMessage
+    chunks from tool execution are suppressed to keep the stream clean.
+    """
     log.info("POST /chat/stream conversation_id=%s", request.conversation_id)
     conversation_id = request.conversation_id or str(uuid4())
 
     async def generate():
-        graph_input = {"message": request.message, "conversation_id": conversation_id}
+        graph_input = {"messages": [HumanMessage(content=request.message)]}
+        config = _agent_graph_config(conversation_id)
         queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
 
         def _run_graph():
             try:
-                for output in agent_graph.stream(
+                # stream_mode="messages" yields (message_chunk, metadata) tuples
+                # where message_chunk is an AIMessageChunk or ToolMessageChunk.
+                for chunk, metadata in agent_graph.stream(
                     graph_input,
-                    config={"configurable": {"thread_id": conversation_id}},
+                    config=config,
+                    stream_mode="messages",
                 ):
-                    loop.call_soon_threadsafe(queue.put_nowait, output)
+                    loop.call_soon_threadsafe(queue.put_nowait, (chunk, metadata))
             except Exception as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
@@ -532,25 +538,13 @@ async def chat_stream(request: ChatRequest):
                     yield f"event: error\ndata: {str(item)}\n\n"
                     return
 
-                for node_name, node_output in item.items():
-                    keys = sorted(node_output.keys()) if isinstance(node_output, dict) else []
-                    preview = ""
-                    if isinstance(node_output, dict):
-                        preview = (node_output.get("final_response", "") or "")[:160].replace("\n", " ")
-                    if LOG_LANGGRAPH_OUTPUT:
-                        log.info(
-                            "LangGraph /chat/stream node=%s conversation_id=%s keys=%s final_preview=%r",
-                            node_name,
-                            conversation_id,
-                            keys,
-                            preview,
-                        )
-
-                    yield f"event: node\ndata: {node_name}\n\n"
-
-                    if isinstance(node_output, dict) and "final_response" in node_output:
-                        response = node_output.get("final_response") or ""
-                        yield f"event: response\ndata: {response}\n\n"
+                chunk, metadata = item
+                # Only stream content from AIMessage chunks (the agent node).
+                # ToolMessage chunks and AIMessage chunks with tool_calls
+                # are intermediate steps, not user-facing output.
+                if isinstance(chunk, AIMessage) and chunk.content and not chunk.tool_calls:
+                    content = chunk.content.replace("\n", "\\n")
+                    yield f"event: token\ndata: {content}\n\n"
 
             yield "event: done\ndata: complete\n\n"
         except Exception as e:
@@ -609,7 +603,7 @@ async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str,
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
-    ollama_messages = _inject_tool_guidance(ollama_messages, request.tools)
+    ollama_messages = MODEL_ADAPTER.inject_tool_guidance(ollama_messages, request.tools)
 
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
@@ -652,13 +646,10 @@ async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str,
 
     body = resp.json()
     ollama_msg = body.get("message", {})
+    ollama_msg = MODEL_ADAPTER.normalize_tool_calls(ollama_msg, valid_names)
     raw_content = ollama_msg.get("content", "") or ""
     content = content_filter.feed(raw_content) + content_filter.flush()
     tool_calls = ollama_msg.get("tool_calls")
-
-    # Models without tool calling training confabulate names from pretraining
-    if tool_calls:
-        tool_calls = _filter_hallucinated_tools(tool_calls, valid_names, model)
 
     openai_msg = {"role": "assistant", "content": content}
     finish = "stop"
@@ -687,7 +678,7 @@ async def _openai_streaming(request: OpenAIChatRequest, trace_id: str,
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
-    ollama_messages = _inject_tool_guidance(ollama_messages, request.tools)
+    ollama_messages = MODEL_ADAPTER.inject_tool_guidance(ollama_messages, request.tools)
 
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
@@ -776,10 +767,16 @@ async def _openai_streaming(request: OpenAIChatRequest, trace_id: str,
                                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
                             }
                             yield f"data: {json.dumps(flush_chunk)}\n\n"
-                        tool_calls = accumulated_tool_calls or None
-                        if tool_calls:
-                            tool_calls = _filter_hallucinated_tools(
-                                tool_calls, valid_names, model)
+                        # Normalize accumulated response through the adapter
+                        # to filter hallucinated names and recover tool calls
+                        # from content when needed
+                        accumulated_msg = {
+                            "content": "",
+                            "tool_calls": accumulated_tool_calls or None,
+                        }
+                        accumulated_msg = MODEL_ADAPTER.normalize_tool_calls(
+                            accumulated_msg, valid_names)
+                        tool_calls = accumulated_msg.get("tool_calls") or None
                         _log_tool_call_outcome(
                             tool_calls, tools_offered=bool(request.tools), stream=True)
                         if tool_calls:
@@ -881,9 +878,15 @@ def main():
         uvicorn.run(app, host=args.host, port=args.port)
     elif args.message:
         message = " ".join(args.message)
-        # CLI: single-shot unless you add a conversation_id and pass thread_id.
-        result = agent_graph.invoke({"message": message})
-        print(result.get("final_response", "No response"))
+        graph_input = {"messages": [HumanMessage(content=message)]}
+        result = agent_graph.invoke(graph_input, {"recursion_limit": RECURSION_LIMIT})
+        messages = result.get("messages", [])
+        final = ""
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                final = msg.content
+                break
+        print(final or "No response")
     else:
         parser.print_help()
         sys.exit(1)

@@ -1,4 +1,22 @@
-# ---------- PostgreSQL (Langfuse backend) ----------
+# ---------- PostgreSQL (Langfuse + LangGraph backend) ----------
+#
+# Init script creates the langgraph database for conversation checkpoints.
+# PostgreSQL runs initdb scripts on first startup when the data directory
+# is empty, so a clean install creates the database automatically. On an
+# existing cluster where the data directory already has data, create it
+# manually:
+#   kubectl exec -n aiforge deploy/postgresql -- \
+#     psql -U langfuse -c "CREATE DATABASE langgraph"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-init
+  namespace: aiforge
+data:
+  create-langgraph-db.sql: |
+    SELECT 'CREATE DATABASE langgraph'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'langgraph')\gexec
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -42,7 +60,7 @@ spec:
           type: Unconfined
       containers:
         - name: postgresql
-          image: postgres:16-alpine
+          image: postgres:18-alpine
           ports:
             - containerPort: 5432
           envFrom:
@@ -58,6 +76,8 @@ spec:
             - name: postgresql-data
               mountPath: /var/lib/postgresql/data
               subPath: pgdata
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "langfuse"]
@@ -72,6 +92,9 @@ spec:
         - name: postgresql-data
           persistentVolumeClaim:
             claimName: postgresql-data
+        - name: init-scripts
+          configMap:
+            name: postgresql-init
 ---
 apiVersion: v1
 kind: Service

@@ -10,21 +10,7 @@ import pytest
 
 # conftest.py loads defaults from config.env before collection
 
-# Ensure we have real modules (not mocks from test_graph)
-if "clients" in sys.modules and isinstance(sys.modules["clients"], MagicMock):
-    del sys.modules["clients"]
-
-# Mock langgraph and graph before importing gateway.py
-_mock_langgraph = MagicMock()
-_mock_langgraph_graph = MagicMock()
-_mock_langgraph_graph.END = "__end__"
-_mock_langgraph_graph_state = MagicMock()
-sys.modules.setdefault("langgraph", _mock_langgraph)
-sys.modules.setdefault("langgraph.graph", _mock_langgraph_graph)
-sys.modules.setdefault("langgraph.graph.state", _mock_langgraph_graph_state)
-sys.modules.setdefault("langchain_core", MagicMock())
-sys.modules.setdefault("langchain_core.globals", MagicMock())
-sys.modules.setdefault("graph", MagicMock())
+from langchain_core.messages import AIMessage, HumanMessage
 
 from gateway import (
     _msg_to_dict,
@@ -424,12 +410,16 @@ class TestChatStream:
                 events.append((event_type, data))
         return events
 
-    def test_events_arrive_in_order(self):
-        """Two node outputs should produce node and response events in order,
-        ending with a done event."""
+    def test_tokens_arrive_incrementally(self):
+        """stream_mode="messages" yields (chunk, metadata) tuples.
+        AIMessage chunks with content become token events."""
+        chunk1 = AIMessage(content="the ")
+        chunk2 = AIMessage(content="answer")
+        meta = {"langgraph_node": "agent"}
+
         def mock_stream(*args, **kwargs):
-            yield {"orchestrator": {"messages": ["thinking..."]}}
-            yield {"orchestrator": {"final_response": "the answer"}}
+            yield (chunk1, meta)
+            yield (chunk2, meta)
 
         import gateway
         original = gateway.agent_graph
@@ -450,12 +440,40 @@ class TestChatStream:
         events = self._parse_sse_events(resp.text)
         event_types = [e[0] for e in events]
 
-        # First node output has no final_response, so just "node"
-        # Second node output has final_response, so "node" then "response"
-        assert event_types == ["node", "node", "response", "done"]
-        # The response event carries the answer
-        response_events = [e for e in events if e[0] == "response"]
-        assert response_events[0][1] == "the answer"
+        assert event_types == ["token", "token", "done"]
+        token_data = [e[1] for e in events if e[0] == "token"]
+        assert token_data == ["the ", "answer"]
+
+    def test_tool_call_chunks_suppressed(self):
+        """AIMessage chunks with tool_calls should not produce token events."""
+        thinking = AIMessage(content="", tool_calls=[{"name": "web_search", "args": {"query": "test"}, "id": "1"}])
+        answer = AIMessage(content="found it")
+        meta = {"langgraph_node": "agent"}
+
+        def mock_stream(*args, **kwargs):
+            yield (thinking, meta)
+            yield (answer, meta)
+
+        import gateway
+        original = gateway.agent_graph
+        mock_graph = MagicMock()
+        mock_graph.stream = mock_stream
+
+        try:
+            gateway.agent_graph = mock_graph
+            with TestClient(app) as client:
+                resp = client.post(
+                    "/chat/stream",
+                    json={"message": "hello"},
+                )
+        finally:
+            gateway.agent_graph = original
+
+        assert resp.status_code == 200
+        events = self._parse_sse_events(resp.text)
+        event_types = [e[0] for e in events]
+        assert event_types == ["token", "done"]
+        assert events[0][1] == "found it"
 
     def test_error_propagation(self):
         """An exception from agent_graph.stream should yield an error event."""

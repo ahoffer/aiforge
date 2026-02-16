@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import time
+import re
 import requests
 
 # Import the production web_search schema so changes propagate automatically.
@@ -169,13 +170,39 @@ def extractContent(response):
         return ""
 
 
+def sanitizeSingleLine(text):
+    """Normalize text for single-line table output."""
+    normalized = str(text).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    normalized = re.sub(r"[\x00-\x1f\x7f]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def makeSnippet(text, maxLen=80):
+    """Return a compact single-line snippet."""
+    snippet = sanitizeSingleLine(text)
+    if len(snippet) > maxLen:
+        return snippet[: maxLen - 3] + "..."
+    return snippet
+
+
+def formatCell(text, width):
+    """Fit text into a fixed-width cell."""
+    value = sanitizeSingleLine(text)
+    if len(value) > width:
+        if width <= 3:
+            return value[:width]
+        return value[: width - 3] + "..."
+    return value
+
+
 def validateSingleTool(expectedName):
     """Return validator that checks exactly one tool call with the given name."""
     def validator(response):
         calls = extractToolCalls(response)
         if len(calls) == 0:
             content = extractContent(response)
-            snippet = content[:80] + "..." if len(content) > 80 else content
+            snippet = makeSnippet(content, 80)
             return False, f"no tool call, got text: {snippet}"
         if len(calls) > 1:
             names = [c.get("function", {}).get("name", "?") for c in calls]
@@ -206,7 +233,7 @@ def validateMultiTool(expectedNames):
         actualNames = [c.get("function", {}).get("name", "?") for c in calls]
         if len(calls) == 0:
             content = extractContent(response)
-            snippet = content[:80] + "..." if len(content) > 80 else content
+            snippet = makeSnippet(content, 80)
             return False, f"no tool calls, got text: {snippet}"
         # Check that at least the expected tools appear in the call list
         missing = [n for n in expectedNames if n not in actualNames]
@@ -222,7 +249,7 @@ def validateToolCallWithArg(expectedName, argName, argSubstring):
         calls = extractToolCalls(response)
         if len(calls) == 0:
             content = extractContent(response)
-            snippet = content[:80] + "..." if len(content) > 80 else content
+            snippet = makeSnippet(content, 80)
             return False, f"no tool call, got text: {snippet}"
         call = calls[0]
         actualName = call.get("function", {}).get("name", "")
@@ -378,7 +405,7 @@ def runMultiTurnTest(baseUrl, modelName, testCase):
     if not calls:
         elapsedMs = (time.perf_counter() - startTime) * 1000
         content = extractContent(turn1)
-        snippet = content[:80] + "..." if len(content) > 80 else content
+        snippet = makeSnippet(content, 80)
         return {
             "name": testCase["name"],
             "category": testCase["category"],
@@ -607,19 +634,19 @@ def runTest(baseUrl, modelName, testCase):
 
 def printResults(results):
     """Print results as an aligned table with category grouping."""
-    # Compute column widths
-    nameWidth = max(len(r["name"]) for r in results)
-    categoryWidth = max(len(r["category"]) for r in results)
-    reasonWidth = max(len(r["reason"]) for r in results)
-    # Cap reason width to keep table readable
-    reasonWidth = min(reasonWidth, 60)
-
-    headerFmt = f"  {{:<{nameWidth}}}  {{:<{categoryWidth}}}  {{:<6}}  {{:>8}}  {{:<{reasonWidth}}}"
-    rowFmt = headerFmt
+    nameWidth = 30
+    categoryWidth = 16
+    resultWidth = 6
+    latencyWidth = 8
+    detailsWidth = 60
+    rowFmt = (
+        f"  {{:<{nameWidth}}}  {{:<{categoryWidth}}}  {{:<{resultWidth}}}  "
+        f"{{:>{latencyWidth}}}  {{:<{detailsWidth}}}"
+    )
 
     print()
-    print(headerFmt.format("Test", "Category", "Result", "Latency", "Details"))
-    print("  " + "-" * (nameWidth + categoryWidth + 6 + 8 + reasonWidth + 8))
+    print(rowFmt.format("Test", "Category", "Result", "Latency", "Details"))
+    print("  " + "-" * (nameWidth + categoryWidth + resultWidth + latencyWidth + detailsWidth + 10))
 
     currentCategory = None
     for testResult in results:
@@ -630,13 +657,12 @@ def printResults(results):
 
         statusLabel = "PASS" if testResult["passed"] else "FAIL"
         latencyLabel = f"{testResult['latencyMs'] / 1000:.3g}s"
-        truncatedReason = testResult["reason"][:reasonWidth]
         print(rowFmt.format(
-            testResult["name"],
-            testResult["category"],
-            statusLabel,
-            latencyLabel,
-            truncatedReason,
+            formatCell(testResult["name"], nameWidth),
+            formatCell(testResult["category"], categoryWidth),
+            formatCell(statusLabel, resultWidth),
+            formatCell(latencyLabel, latencyWidth),
+            formatCell(testResult["reason"], detailsWidth),
         ))
 
 

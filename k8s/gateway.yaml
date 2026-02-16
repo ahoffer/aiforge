@@ -8,6 +8,13 @@ data:
   OLLAMA_URL: "http://ollama:11434"
   SEARXNG_URL: "http://searxng:8080"
   QDRANT_URL: "http://qdrant:6333"
+  # Durable conversation checkpoints via LangGraph PostgresSaver
+  POSTGRES_URL: "postgresql://langfuse:langfuse@postgresql:5432/langgraph"
+  # Qdrant collections with auto-created retriever tools. JSON array of objects
+  # with "name" and "description". Empty string means no retriever tools.
+  QDRANT_COLLECTIONS: ""
+  # Graph topology: "single" for flat agent loop, "supervisor" for multi-agent routing
+  AGENT_GRAPH_MODE: "single"
   # Langfuse tracing
   LANGFUSE_HOST: "http://langfuse:3000"
   LANGFUSE_PUBLIC_KEY: "pk-lf-aiforge"
@@ -37,7 +44,7 @@ spec:
           type: Unconfined
       containers:
         - name: gateway
-          image: gateway:37981e024f97
+          image: gateway:163386581d81
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

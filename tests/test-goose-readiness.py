@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import requests
+import re
 
 
 FORGETOOLS_SCHEMAS = [
@@ -87,6 +88,32 @@ def extractContent(response):
         return ""
 
 
+def sanitizeSingleLine(text):
+    """Normalize text for single-line table output."""
+    normalized = str(text).replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    normalized = re.sub(r"[\x00-\x1f\x7f]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def makeSnippet(text, maxLen=80):
+    """Return a compact single-line snippet."""
+    snippet = sanitizeSingleLine(text)
+    if len(snippet) > maxLen:
+        return snippet[: maxLen - 3] + "..."
+    return snippet
+
+
+def formatCell(text, width):
+    """Fit text into a fixed-width cell."""
+    value = sanitizeSingleLine(text)
+    if len(value) > width:
+        if width <= 3:
+            return value[:width]
+        return value[: width - 3] + "..."
+    return value
+
+
 def testModelDiscovery(baseUrl):
     """GET /v1/models should list gateway model with context_window."""
     t0 = time.perf_counter()
@@ -133,7 +160,7 @@ def testMultiTurnWithForgetools(baseUrl):
     if not calls:
         elapsed = (time.perf_counter() - t0) * 1000
         content = extractContent(turn1)
-        snippet = content[:80] + "..." if len(content) > 80 else content
+        snippet = makeSnippet(content, 80)
         return False, f"turn 1: expected tool_calls, got text: {snippet}", elapsed
 
     # Build turn 2 with fabricated tool results
@@ -277,18 +304,24 @@ def testStreamingWithForgetools(baseUrl):
 
 def printResults(results):
     """Print results as an aligned table."""
-    nameWidth = max(len(r["name"]) for r in results)
-    reasonWidth = min(max(len(r["reason"]) for r in results), 70)
-
-    headerFmt = f"  {{:<{nameWidth}}}  {{:<6}}  {{:>8}}  {{:<{reasonWidth}}}"
+    nameWidth = 30
+    resultWidth = 6
+    latencyWidth = 8
+    detailsWidth = 60
+    headerFmt = f"  {{:<{nameWidth}}}  {{:<{resultWidth}}}  {{:>{latencyWidth}}}  {{:<{detailsWidth}}}"
     print()
     print(headerFmt.format("Test", "Result", "Latency", "Details"))
-    print("  " + "-" * (nameWidth + 6 + 8 + reasonWidth + 6))
+    print("  " + "-" * (nameWidth + resultWidth + latencyWidth + detailsWidth + 8))
 
     for r in results:
         statusLabel = "PASS" if r["passed"] else "FAIL"
         latencyLabel = f"{r['latencyMs']:.0f}ms"
-        print(headerFmt.format(r["name"], statusLabel, latencyLabel, r["reason"][:reasonWidth]))
+        print(headerFmt.format(
+            formatCell(r["name"], nameWidth),
+            formatCell(statusLabel, resultWidth),
+            formatCell(latencyLabel, latencyWidth),
+            formatCell(r["reason"], detailsWidth),
+        ))
 
 
 def writeJsonl(results, outputPath):

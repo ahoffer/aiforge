@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: testrunner
-          image: testrunner:7b206f0f8144
+          image: testrunner:257f74d4d46a
           command: ["sh", "-c", "touch /tmp/test.log && exec tail -f /tmp/test.log 2>/dev/null"]
           envFrom:
             - configMapRef:

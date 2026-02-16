@@ -28,6 +28,8 @@ deploy: build
 	    echo "Created SearXNG secret."; \
 	fi
 	@for f in $(MANIFESTS); do kubectl apply -f k8s/$$f; done
+	@echo "Waiting for PostgreSQL before restarting gateway..."
+	@kubectl -n $(NS) rollout status deploy/postgresql --timeout=120s
 	kubectl -n $(NS) rollout restart deploy/gateway
 	kubectl -n $(NS) rollout restart deploy/testrunner
 	@for d in $(DEPLOYMENTS); do kubectl -n $(NS) rollout status deploy/$$d; done

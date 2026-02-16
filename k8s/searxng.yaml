@@ -53,7 +53,7 @@ spec:
               mountPath: /etc/searxng
       containers:
         - name: searxng
-          image: searxng/searxng:latest
+          image: searxng/searxng:2026.2.15-da9c0815a
           ports:
             - containerPort: 8080
           env:

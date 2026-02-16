@@ -80,7 +80,7 @@ spec:
     spec:
       initContainers:
         - name: model-puller
-          image: ollama/ollama:latest
+          image: ollama/ollama:0.16.1
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -114,7 +114,7 @@ spec:
               mountPath: /root/.ollama
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+          image: ollama/ollama:0.16.1
           ports:
             - containerPort: 11434
           envFrom:
