@@ -47,7 +47,7 @@ LIST_FILES_TOOL = {
     "type": "function",
     "function": {
         "name": "list_files",
-        "description": "List files and directories at the given path",
+        "description": "List files and directories at the given path, like the ls command. Only lists names, does not read file contents or search inside files.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -65,7 +65,7 @@ READ_FILE_TOOL = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": "Read the contents of a file at the given path",
+        "description": "Read the full contents of a single file. Use this to view a file, not to search or filter its contents.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -83,7 +83,7 @@ RUN_COMMAND_TOOL = {
     "type": "function",
     "function": {
         "name": "run_command",
-        "description": "Execute a shell command and return its output",
+        "description": "Execute a shell command and return its output. Use this for grep, find, sed, awk, git, curl, and any other command-line tool or text-processing pipeline.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -105,7 +105,7 @@ else:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for current information on any topic",
+            "description": "Search the web for current events or real-time information that you do not already know. Always use this when the user explicitly asks to search the web. Do not use this for well-known facts or concepts unless the user requests a search.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -123,7 +123,7 @@ WRITE_FILE_TOOL = {
     "type": "function",
     "function": {
         "name": "write_file",
-        "description": "Write content to a file at the given path",
+        "description": "Create or overwrite a file with the given content. Use this whenever the user asks to save, write, or store text in a file.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -629,7 +629,7 @@ def printResults(results):
                 print()
 
         statusLabel = "PASS" if testResult["passed"] else "FAIL"
-        latencyLabel = f"{testResult['latencyMs']:.0f}ms"
+        latencyLabel = f"{testResult['latencyMs'] / 1000:.3g}s"
         truncatedReason = testResult["reason"][:reasonWidth]
         print(rowFmt.format(
             testResult["name"],
@@ -680,7 +680,7 @@ def printSummary(results):
         totalPassed += passedCount
         totalCount += totalInCategory
         avgLatency = sum(r["latencyMs"] for r in categoryResults) / totalInCategory
-        print(f"  {category:15s}  {passedCount}/{totalInCategory} passed  avg {avgLatency:.0f}ms")
+        print(f"  {category:15s}  {passedCount}/{totalInCategory} passed  avg {avgLatency / 1000:.3g}s")
 
     print(f"  {'overall':15s}  {totalPassed}/{totalCount} passed")
     print()
@@ -779,7 +779,7 @@ def main():
         else:
             testResult = runTest(args.url, args.model, testCase)
         statusSymbol = "ok" if testResult["passed"] else "FAIL"
-        print(f" {statusSymbol} ({testResult['latencyMs']:.0f}ms)")
+        print(f" {statusSymbol} ({testResult['latencyMs'] / 1000:.3g}s)")
         results.append(testResult)
 
     printResults(results)

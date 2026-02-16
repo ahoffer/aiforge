@@ -393,6 +393,35 @@ def _trim_context(messages: list[dict], max_tokens: int) -> list[dict]:
     return trimmed
 
 
+# Per-request tool selection guidance. Prepends a system message that steers
+# smaller models toward the right tool by listing concrete usage examples.
+# Only injected when the client sends tools, so pure chat stays untouched.
+_TOOL_GUIDANCE_TEMPLATE = (
+    "You have these tools: {tool_names}. "
+    "For grep, find, sed, awk, or any shell command, use run_command. "
+    "list_files only lists directory contents like ls. "
+    "Use web_search for current events, real-time information, or whenever the user explicitly asks to search the web. "
+    "Do not use web_search for well-known facts or concepts unless the user requests a search. "
+    "When the user asks for multiple actions, call all relevant tools in one response."
+)
+
+
+def _inject_tool_guidance(ollama_messages: list[dict], tools: list[dict] | None) -> list[dict]:
+    """Prepend a system message with tool selection guidance when tools are present."""
+    if not tools:
+        return ollama_messages
+    tool_names = [
+        (t.get("function") or {}).get("name", "")
+        for t in tools if t.get("type") == "function"
+    ]
+    tool_names = [n for n in tool_names if n]
+    if not tool_names:
+        return ollama_messages
+    guidance = {"role": "system", "content": _TOOL_GUIDANCE_TEMPLATE.format(
+        tool_names=", ".join(tool_names))}
+    return [guidance] + ollama_messages
+
+
 app = FastAPI(
     title="Gateway",
     description="LangGraph agent and transparent Ollama proxy",
@@ -580,6 +609,7 @@ async def _openai_non_streaming(request: OpenAIChatRequest, trace_id: str,
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
+    ollama_messages = _inject_tool_guidance(ollama_messages, request.tools)
 
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())
@@ -657,6 +687,7 @@ async def _openai_streaming(request: OpenAIChatRequest, trace_id: str,
     if AGENT_NUM_CTX:
         trim_budget = int(AGENT_NUM_CTX * CONTEXT_TRIM_THRESHOLD)
         ollama_messages = _trim_context(ollama_messages, trim_budget)
+    ollama_messages = _inject_tool_guidance(ollama_messages, request.tools)
 
     completion_id = f"chatcmpl-{uuid4().hex[:12]}"
     created = int(time.time())

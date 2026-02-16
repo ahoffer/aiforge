@@ -1,0 +1,24 @@
+{
+    "$schema": "https://lnav.org/schemas/format-v1.schema.json",
+    "testrunner_log": {
+        "title": "AIForge testrunner",
+        "description": "JSON log lines from the testrunner pod",
+        "json": true,
+        "line-format": [
+            {"field": "__timestamp__"},
+            " ",
+            {"field": "__level__", "text-transform": "uppercase", "min-width": 5},
+            " ",
+            {"field": "msg"}
+        ],
+        "timestamp-field": "timestamp",
+        "level-field": "level",
+        "body-field": "msg",
+        "level": {
+            "error": "^error$",
+            "warning": "^warning$",
+            "info": "^info$",
+            "debug": "^debug$"
+        }
+    }
+}

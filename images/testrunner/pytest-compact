@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Compact pytest output: one line per passing test, full details for failures."""
+import sys
+import re
+import subprocess
+
+# Run pytest with machine-readable output
+result = subprocess.run(
+    ["python3", "-m", "pytest"] + sys.argv[1:] + ["-v", "--tb=short", "--no-header"],
+    capture_output=True,
+    text=True
+)
+
+lines = result.stdout.split("\n")
+in_failure = False
+failure_lines = []
+
+for line in lines:
+    # Test result line like "tests/test_foo.py::test_bar PASSED [ 10%]"
+    match = re.match(r'^(tests/[^\s]+)\s+(PASSED|FAILED|SKIPPED|ERROR)\s+\[', line)
+    if match:
+        # Strip "tests/test_" prefix and ".py::" separator, remove all "test_" prefixes
+        test_name = match.group(1).replace("tests/test_", "").replace(".py::", ":")
+        # Remove the file name prefix (everything before first colon)
+        if ":" in test_name:
+            test_name = test_name.split(":", 1)[1]
+        # Remove test_ prefix from method names
+        test_name = test_name.replace("test_", "")
+        status = match.group(2)
+        if status == "PASSED":
+            print(f"{test_name:<72} PASS")
+        elif status in ("FAILED", "ERROR"):
+            print(f"{test_name:<72} FAIL")
+            in_failure = True
+            failure_lines = [line]
+        elif status == "SKIPPED":
+            print(f"{test_name:<72} SKIP")
+        continue
+
+    # Capture failure details
+    if in_failure:
+        # Stop capturing when we hit the next test or summary
+        if re.match(r'^(tests/|=+\s+(FAILURES|ERRORS|short test summary))', line):
+            # Print accumulated failure details
+            for fline in failure_lines:
+                print(fline)
+            failure_lines = []
+            in_failure = False
+        else:
+            failure_lines.append(line)
+
+    # Summary line like "====== 87 passed in 0.72s ======"
+    # Extract just the core info without box drawing
+    summary_match = re.search(r'(\d+\s+\w+(?:,\s*\d+\s+\w+)*)\s+in\s+([\d.]+s)', line)
+    if summary_match:
+        print(f"{summary_match.group(1)} in {summary_match.group(2)}")
+
+# Print any remaining failure details
+for fline in failure_lines:
+    print(fline)
+
+sys.exit(result.returncode)

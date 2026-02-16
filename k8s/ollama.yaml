@@ -23,9 +23,9 @@ data:
   OLLAMA_NUM_PARALLEL: "1"
   OLLAMA_MAX_LOADED_MODELS: "1"
   # Q4_0 KV cache at ~0.05 MiB per token. 32k context uses ~1.6 GB,
-  # well within the ~5.7 GB free after qwen3:14b model weights load.
+  # well within the ~5.7 GB free after qwen2.5-coder:14b model weights load.
   OLLAMA_KV_CACHE_TYPE: "q4_0"
-  AGENT_MODEL: "qwen3:14b"
+  AGENT_MODEL: "qwen2.5-coder:14b"
   EMBEDDING_MODEL: "nomic-embed-text"
   # LLM response tuning. Applied by creating a model alias at startup.
   AGENT_TEMPERATURE: "0.3"
@@ -34,7 +34,7 @@ data:
   # Ollama defaults to 4096 context. Clients like Goose send large tool-heavy
   # prompts that get silently truncated. 32k fits comfortably with Q4_0 KV cache.
   AGENT_NUM_CTX: "32768"
-  AGENT_SYSTEM_PROMPT: "You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search only when local context is insufficient, for example to check library versions or API changes beyond your training data. Be concise and direct. Avoid filler phrases."
+  AGENT_SYSTEM_PROMPT: "You are a coding assistant. Read relevant files before making changes. After editing, verify your changes compile or pass linting. Use web_search for current events, real-time information, or whenever the user explicitly asks to search the web. Do not use web_search for well-known facts or concepts unless the user requests a search. For grep, find, sed, awk, or any text-processing task, use run_command. list_files only lists directory contents like ls. When the user asks for multiple actions, call all relevant tools in one response. Be concise and direct. Avoid filler phrases."
 ---
 apiVersion: v1
 kind: ConfigMap

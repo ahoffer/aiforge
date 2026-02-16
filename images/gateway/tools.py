@@ -17,7 +17,7 @@ WEB_SEARCH_TOOL = {
     "type": "function",
     "function": {
         "name": "web_search",
-        "description": "Search the web for current information on any topic",
+        "description": "Search the web for current events or real-time information that you do not already know. Always use this when the user explicitly asks to search the web. Do not use this for well-known facts or concepts unless the user requests a search.",
         "parameters": {
             "type": "object",
             "properties": {

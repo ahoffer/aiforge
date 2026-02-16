@@ -16,6 +16,8 @@ COPY images/gateway/ /app/images/gateway/
 COPY tests/ /app/tests/
 COPY pyproject.toml /app/pyproject.toml
 COPY images/testrunner/run.sh /app/run.sh
-RUN chmod +x /app/run.sh /app/tests/*.sh
+COPY images/testrunner/logfmt /app/logfmt
+COPY images/testrunner/pytest-compact /app/pytest-compact
+RUN chmod +x /app/run.sh /app/logfmt /app/pytest-compact /app/tests/*.sh
 
 ENTRYPOINT ["/app/run.sh"]

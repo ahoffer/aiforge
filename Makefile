@@ -4,7 +4,7 @@ MANIFESTS := namespace.yaml searxng.yaml qdrant.yaml ollama.yaml \
              postgresql.yaml langfuse.yaml gateway.yaml testrunner.yaml
 SUITE ?= all
 
-.PHONY: build deploy warmup test undeploy purge help
+.PHONY: build deploy warmup test ktest testlogs undeploy purge help
 
 .DEFAULT_GOAL := help
 
@@ -56,6 +56,16 @@ warmup:
 test:
 	kubectl exec -it -n $(NS) deploy/testrunner -- env SUITE=$(SUITE) /app/run.sh
 
+ktest:
+	@kubectl exec -n $(NS) deploy/testrunner -- \
+	    sh -c '> /tmp/test.log; env SUITE=$(SUITE) /app/run.sh >> /tmp/test.log 2>&1 &'
+	@echo "Tests started (SUITE=$(SUITE)). View with: make testlogs"
+
+testlogs:
+	@mkdir -p ~/.lnav/formats/installed
+	@cp lnav/testrunner.json ~/.lnav/formats/installed/testrunner.json
+	kubectl logs -f -n $(NS) deploy/testrunner | lnav
+
 undeploy:
 	@if ! kubectl get ns $(NS) >/dev/null 2>&1; then \
 	    echo "Namespace $(NS) does not exist. Nothing to remove."; exit 0; \
@@ -81,6 +91,9 @@ help:
 	@echo "make deploy         Build, apply manifests, wait, verify, warmup"
 	@echo "make test           Run all test suites in the cluster"
 	@echo "make test SUITE=x   Run one suite (unit, integration, toolcalling, bench)"
+	@echo "make ktest          Run tests in background on the pod"
+	@echo "make ktest SUITE=x  Run one suite in background on the pod"
+	@echo "make testlogs       View test output in lnav"
 	@echo "make warmup         Run warmup Job to load model into GPU"
 	@echo "make undeploy       Remove deployments, keep persistent data"
 	@echo "make purge          Undeploy and delete all persistent data"

@@ -8,7 +8,7 @@ Self-hosted AI platform on Kubernetes with GPU-accelerated inference, web search
 
 ## Architecture
 
-Six services in the `aiforge` namespace.
+Seven services in the `aiforge` namespace.
 
 | Service | Role | Cluster DNS | NodePort |
 |---------|------|-------------|----------|
@@ -16,6 +16,7 @@ Six services in the `aiforge` namespace.
 | SearXNG | Web search aggregation | searxng:8080 | :31080 |
 | Qdrant | Vector embeddings for RAG | qdrant:6333 | :31333 |
 | Gateway | HTTP proxy, LangGraph agent, context management | gateway:8000 | :31400 |
+| Testrunner | In-cluster test execution | testrunner | cluster-internal |
 | Langfuse | LLM tracing, prompt versioning, evals | langfuse:3000 | :31300 |
 | PostgreSQL | Database backend for Langfuse | postgresql:5432 | cluster-internal |
 
@@ -58,7 +59,7 @@ Local models sometimes misinterpret intent. Use explicit phrasing like "analyze 
 
 FastAPI app in `images/gateway/` with two modes. The `/chat` and `/chat/stream` endpoints run a LangGraph workflow that calls Ollama with native tool calling and executes `web_search` server-side via SearXNG. The `/v1/chat/completions` and `/v1/embeddings` endpoints are transparent proxies to Ollama, preserving tool_calls in the response so Goose can execute tools client-side via MCP.
 
-The proxy path includes context management that estimates token count and drops oldest tool-result messages when approaching the context window ceiling. This prevents Ollama from silently truncating conversations.
+The proxy path includes context management that estimates token count and drops oldest tool-result messages when approaching the context window ceiling. This prevents Ollama from silently truncating conversations. When the client sends tools, the proxy injects a system message with tool selection guidance to help smaller models pick the right tool.
 
 Endpoint Surface (Native + OpenAI Compatibility):
 
@@ -98,11 +99,11 @@ Model tuning parameters (temperature, top_p, max_tokens, repeat_penalty) live in
 
 ## Context Window Sizing
 
-Qwen2.5-Coder is a 14B model. On a 16 GB GPU the weights leave
-more headroom than the previous 23.6B Devstral, but Q4_0 KV cache
-keeps memory predictable and fits 16k context in about 1 GB.
-KV cache cost scales linearly with context length. Quantizing the
-KV cache reduces per-token cost at the expense of minor precision loss.
+Qwen3 14B on a 16 GB GPU leaves enough headroom for a generous
+context window. Q4_0 KV cache keeps memory predictable and fits
+32k context in about 1.6 GB. KV cache cost scales linearly with
+context length. Quantizing the KV cache reduces per-token cost
+at the expense of minor precision loss.
 
 | KV cache type | Cost per token | Max context in 2 GB | Recommended num_ctx | Tradeoff |
 |---------------|----------------|---------------------|---------------------|----------|
@@ -121,7 +122,7 @@ clients can display accurate token counts.
 - `test-services.sh` - Qdrant CRUD and SearXNG search
 - `test-agent.sh` - agent API including chat, streaming, and OpenAI-compatible endpoints
 - `test-proxy-web-search-smoke.sh` - verifies server-side `web_search` executes for recency prompts on `/chat`
-- `test-tool-calling.py` - 12 prompts across single-tool, no-tool, multi-tool categories (targets Ollama directly, not Gateway)
+- `test-tool-calling.py` - 22 prompts across single-tool, no-tool, multi-tool, multi-turn, and stress categories via the Gateway proxy
 - `bench-ollama.sh` - generation speed, prompt eval, time to first token, tool call latency
 - `tests/test_*.py` - unit tests (pytest)
 
@@ -150,8 +151,8 @@ Valid suites: `unit`, `integration`, `toolcalling`, `bench`, `all` (default, exc
 ## Teardown
 
 ```bash
-./uninstall.sh           # keep persistent data
-./uninstall.sh --purge   # remove everything including models and vectors
+make undeploy   # keep persistent data
+make purge      # remove everything including models and vectors
 ```
 
 ## Model Benchmark
@@ -167,7 +168,7 @@ Valid suites: `unit`, `integration`, `toolcalling`, `bench`, `all` (default, exc
 | qwen3:14b | 13/20 | 5/12 | 8/8 | 13/20 | 1m 39s |
 | llama3.1:8b | 10/20 | 10/12 | 0/8 | 18/20 | 54s |
 
-*Former default model, replaced by qwen2.5-coder:14b.
+*Former default model, replaced by qwen3:14b.
 
 ```bash
 ./tests/bench-model-compare.sh

@@ -944,7 +944,8 @@ class TestProxyMultiTurn:
         assert resp.status_code == 200
         payload = mock_http.post.call_args[1]["json"]
         assert len(payload["tools"]) == 6
-        assert payload["messages"][0]["role"] == "user"
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1]["role"] == "user"
 
     @pytest.mark.anyio
     async def test_tool_calls_response_converted(self):

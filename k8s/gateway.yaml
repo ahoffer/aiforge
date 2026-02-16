@@ -37,7 +37,7 @@ spec:
           type: Unconfined
       containers:
         - name: gateway
-          image: gateway:f94b0f8dc830
+          image: gateway:37981e024f97
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
